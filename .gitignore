@@ -1,6 +1,2 @@
 .DS_Store
 rag_database/*
-rag_database/16904210-695e-412b-b5a3-c20a84cc1bf1/index_metadata.pickle
-rag_database/16904210-695e-412b-b5a3-c20a84cc1bf1/length.bin
-rag_database/16904210-695e-412b-b5a3-c20a84cc1bf1/link_lists.bin
-rag_database/16904210-695e-412b-b5a3-c20a84cc1bf1/data_level0.bin
