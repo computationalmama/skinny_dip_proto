@@ -153,8 +153,8 @@ HTML_TEMPLATE = """
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Courier New', Courier, monospace;
+            background: #1a1a1a;
             height: 100vh;
             display: flex;
             justify-content: center;
@@ -163,9 +163,9 @@ HTML_TEMPLATE = """
         }
 
         .container {
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            background: #ffffff;
+            border: 4px solid #000000;
+            box-shadow: 10px 10px 0px #000000;
             width: 100%;
             max-width: 900px;
             height: 90vh;
@@ -175,41 +175,45 @@ HTML_TEMPLATE = """
         }
 
         .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
+            background: #F5F5A0;
+            color: #000000;
             padding: 20px 30px;
-            border-radius: 20px 20px 0 0;
+            border-bottom: 4px solid #000000;
         }
 
         .header h1 {
-            font-size: 24px;
-            font-weight: 600;
-            margin-bottom: 5px;
+            font-size: 22px;
+            font-weight: 900;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            margin-bottom: 6px;
         }
 
         .header .stats {
-            font-size: 14px;
-            opacity: 0.9;
+            font-size: 12px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
 
         .chat-container {
             flex: 1;
             overflow-y: auto;
             padding: 30px;
-            background: #f8f9fa;
+            background: #efefef;
         }
 
         .message {
             margin-bottom: 20px;
             display: flex;
             gap: 15px;
-            animation: slideIn 0.3s ease;
+            animation: slideIn 0.1s ease;
         }
 
         @keyframes slideIn {
             from {
                 opacity: 0;
-                transform: translateY(10px);
+                transform: translateY(8px);
             }
             to {
                 opacity: 1;
@@ -223,87 +227,95 @@ HTML_TEMPLATE = """
 
         .message-content {
             max-width: 70%;
-            padding: 15px 20px;
-            border-radius: 18px;
-            line-height: 1.5;
+            padding: 12px 16px;
+            border: 2px solid #000000;
+            line-height: 1.6;
         }
 
         .message.user .message-content {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border-bottom-right-radius: 4px;
+            background: #000000;
+            color: #F5F5A0;
+            box-shadow: 4px 4px 0px #F5F5A0;
         }
 
         .message.assistant .message-content {
-            background: white;
-            color: #333;
-            border: 1px solid #e0e0e0;
-            border-bottom-left-radius: 4px;
+            background: #ffffff;
+            color: #000000;
+            box-shadow: 4px 4px 0px #000000;
         }
 
         .message.assistant .sources {
             margin-top: 10px;
             padding-top: 10px;
-            border-top: 1px solid #e0e0e0;
-            font-size: 12px;
-            color: #666;
+            border-top: 2px solid #000000;
+            font-size: 11px;
+            color: #000000;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
 
         .message.assistant .sources strong {
-            color: #764ba2;
+            color: #000000;
+            font-weight: 900;
         }
 
         .input-container {
             padding: 20px 30px;
-            background: white;
-            border-top: 1px solid #e0e0e0;
+            background: #ffffff;
+            border-top: 4px solid #000000;
             display: flex;
-            gap: 15px;
+            gap: 12px;
         }
 
         #questionInput {
             flex: 1;
-            padding: 15px 20px;
-            border: 2px solid #e0e0e0;
-            border-radius: 25px;
-            font-size: 15px;
+            padding: 12px 14px;
+            border: 3px solid #000000;
+            font-size: 14px;
+            font-family: 'Courier New', Courier, monospace;
             outline: none;
-            transition: all 0.3s;
+            background: #ffffff;
+            transition: none;
         }
 
         #questionInput:focus {
-            border-color: #667eea;
+            background: #F5F5A0;
         }
 
         #askButton {
-            padding: 15px 35px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            border-radius: 25px;
-            font-size: 15px;
-            font-weight: 600;
+            padding: 12px 28px;
+            background: #F5F5A0;
+            color: #000000;
+            border: 3px solid #000000;
+            font-size: 13px;
+            font-weight: 900;
+            font-family: 'Courier New', Courier, monospace;
+            text-transform: uppercase;
+            letter-spacing: 2px;
             cursor: pointer;
-            transition: all 0.3s;
+            transition: none;
+            box-shadow: 4px 4px 0px #000000;
         }
 
         #askButton:hover:not(:disabled) {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+            background: #000000;
+            color: #F5F5A0;
+            box-shadow: none;
+            transform: translate(4px, 4px);
         }
 
         #askButton:disabled {
-            opacity: 0.6;
+            opacity: 0.4;
             cursor: not-allowed;
         }
 
         .loading {
             display: none;
-            padding: 15px 20px;
-            background: white;
-            border-radius: 18px;
-            border: 1px solid #e0e0e0;
+            padding: 12px 16px;
+            background: #ffffff;
+            border: 3px solid #000000;
             max-width: 70%;
+            box-shadow: 4px 4px 0px #000000;
         }
 
         .loading.active {
@@ -312,14 +324,13 @@ HTML_TEMPLATE = """
 
         .loading-dots {
             display: flex;
-            gap: 5px;
+            gap: 6px;
         }
 
         .loading-dots span {
             width: 8px;
             height: 8px;
-            background: #764ba2;
-            border-radius: 50%;
+            background: #000000;
             animation: bounce 1.4s infinite;
         }
 
@@ -342,27 +353,34 @@ HTML_TEMPLATE = """
 
         .empty-state {
             text-align: center;
-            color: #999;
+            color: #000000;
             padding: 60px 20px;
+            border: 3px dashed #000000;
+            margin: 20px;
+            background: #ffffff;
         }
 
         .empty-state h2 {
-            font-size: 20px;
-            margin-bottom: 10px;
-            color: #666;
+            font-size: 18px;
+            margin-bottom: 12px;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 3px;
         }
 
         .empty-state p {
-            font-size: 14px;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
 
         .error-message {
-            background: #fee;
-            border: 1px solid #fcc;
-            color: #c33;
-            padding: 15px 20px;
-            border-radius: 18px;
+            background: #ffffff;
+            border: 3px solid #000000;
+            color: #000000;
+            padding: 12px 16px;
             max-width: 70%;
+            box-shadow: 4px 4px 0px #cc0000;
         }
     </style>
 </head>

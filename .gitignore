@@ -1,2 +1,4 @@
 .DS_Store
 rag_database/*
+js/node_modules
+js/package-lock.json

@@ -1,0 +1,16 @@
+{
+  "name": "my-rag-js",
+  "version": "1.0.0",
+  "description": "Local RAG system — JS port",
+  "type": "module",
+  "scripts": {
+    "build": "node rag.js build",
+    "stats": "node rag.js stats",
+    "serve": "node rag_web.js serve"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ollama": "^0.5.9",
+    "pdf-parse": "^1.1.1"
+  }
+}
