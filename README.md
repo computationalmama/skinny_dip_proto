@@ -1,160 +1,84 @@
 # my_rag — Local RAG Chat
 
-A fully offline Retrieval-Augmented Generation (RAG) system. Drop in PDFs, ask questions, get answers with source citations. Runs entirely on your machine using Ollama + ChromaDB.
+Ask questions about your own PDF documents. Fully offline — no API keys, no cloud, no data leaving your machine.
+
+Available in **Python** and **JavaScript**. Both versions share the same `docs/` folder.
+
+---
+
+## Project Structure
+
+```
+my_rag/
+│
+├── docs/              ← drop your PDFs here
+│
+├── python/            ← Python version (Flask + ChromaDB)
+│   ├── README.md
+│   ├── requirements.txt
+│   ├── rag.py         ← CLI
+│   └── rag_web.py     ← web UI  →  http://localhost:6600
+│
+└── js/                ← JavaScript version (Express + JSON store)
+    ├── README.md
+    ├── package.json
+    ├── rag.js         ← CLI
+    └── rag_web.js     ← web UI  →  http://localhost:6601
+```
 
 ---
 
 ## Stack
 
-| Component | Tool |
-|-----------|------|
-| Embeddings | `nomic-embed-text` via Ollama |
-| LLM | `qwen2.5:7b` via Ollama |
-| Vector DB | ChromaDB (local persistent) |
-| Web UI | Flask |
-| PDF loading | LangChain + PyPDF |
-
----
-
-## Requirements
-
-- [Ollama](https://ollama.ai) installed and running
-- Python 3.9+
-
-```bash
-# Pull required models
-ollama pull nomic-embed-text
-ollama pull qwen2.5:7b
-
-# Install Python dependencies
-pip install flask chromadb langchain langchain-community pypdf
-```
+| | Python | JavaScript |
+|---|---|---|
+| Language | Python 3.9+ | Node.js 18+ |
+| Web server | Flask | Express |
+| Embeddings | Ollama (`nomic-embed-text`) | Ollama (`nomic-embed-text`) |
+| LLM | Ollama (`qwen2.5:7b`) | Ollama (`qwen2.5:7b`) |
+| Vector store | ChromaDB (persistent) | JSON file + cosine similarity |
+| PDF parsing | LangChain + PyPDF | pdf-parse |
+| Web port | 6600 | 6601 |
 
 ---
 
 ## Quick Start
 
-### 1. Add your PDFs
+### 1. Install Ollama and pull models
 
-Drop PDF files into the `docs/` folder.
-
-### 2. Build the database
+Download from [ollama.com/download](https://ollama.com/download), then:
 
 ```bash
-python rag_web.py build
+ollama pull nomic-embed-text
+ollama pull qwen2.5:7b
 ```
 
-### 3. Start the web interface
+### 2. Add your PDFs
 
-```bash
-python rag_web.py serve
-```
+Copy PDF files into the `docs/` folder.
 
-### 4. Open in browser
+### 3. Pick a version and follow its README
 
-```
-http://localhost:6600
-```
+- **Python** → see [`python/README.md`](python/README.md)
+- **JavaScript** → see [`js/README.md`](js/README.md)
 
 ---
 
-## Commands
+## Commands at a glance
 
-```bash
-python rag_web.py build   # Index PDFs into ChromaDB
-python rag_web.py serve   # Start web server on port 6600
-```
-
----
-
-## File Structure
-
-```
-my_rag/
-├── rag_web.py        # Main app (Flask + RAG logic)
-├── rag.py            # CLI-only version
-├── docs/             # Put your PDFs here
-└── rag_database/     # Auto-generated ChromaDB vector store
-```
-
-The web and CLI versions share the same `rag_database/`.
+| Action | Python | JavaScript |
+|---|---|---|
+| Install deps | `pip install -r requirements.txt` | `npm install` |
+| Build database | `python rag_web.py build` | `node rag_web.js build` |
+| Start web UI | `python rag_web.py serve` | `node rag_web.js serve` |
+| Interactive CLI | `python rag.py` | `node rag.js` |
+| Ask one question | `python rag.py ask "..."` | `node rag.js ask "..."` |
+| Check DB stats | `python rag.py stats` | `node rag.js stats` |
 
 ---
 
-## UI
+## Notes
 
-Brutalist design — monospace font, hard black borders, pale yellow accent (`#F5F5A0`), no gradients or rounded corners.
-
----
-
-## Customization
-
-### Change the model
-
-In `rag_web.py`, inside `SimpleRAG.__init__()`:
-
-```python
-self.llm = Ollama(model="llama3.2:1b")   # faster
-self.llm = Ollama(model="llama3.1:8b")   # better quality
-```
-
-### Change the port
-
-```python
-app.run(host='0.0.0.0', port=6600, debug=False)
-```
-
-### Change chunk size
-
-```python
-splitter = RecursiveCharacterTextSplitter(
-    chunk_size=500,   # characters per chunk
-    chunk_overlap=50
-)
-```
-
-### Change number of retrieved chunks
-
-```python
-results = collection.query(
-    query_embeddings=[q_embedding],
-    n_results=3   # increase for more context
-)
-```
-
----
-
-## Access from Other Devices
-
-```bash
-# Find your local IP (Mac)
-ifconfig | grep "inet "
-
-# Then on any device on the same network:
-http://YOUR_IP:6600
-```
-
----
-
-## Troubleshooting
-
-**"No database found"**
-```bash
-python rag_web.py build
-```
-
-**"Address already in use"**
-```bash
-lsof -i :6600   # find what's using the port
-```
-
-**Slow responses**
-- Switch to a smaller model (`llama3.2:1b`)
-- Reduce `n_results` in the query
-- Ensure Ollama is using GPU: `ollama ps`
-
-**No PDFs found**
-- Make sure files are in `docs/` with a `.pdf` extension
-- Subdirectories are supported (`docs/**/*.pdf`)
-
----
+- The Python and JS versions use **separate databases** — you need to run `build` once for each version you want to use
+- Both databases are gitignored and auto-generated
+- You can run both web servers at the same time (different ports) to compare them side by side

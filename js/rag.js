@@ -1,222 +1,163 @@
 #!/usr/bin/env node
 /**
- * Simple Local RAG - 100% Offline
- * JS port of rag.py
- * No server, no internet required after setup
+ * Simple Local RAG - CLI version
+ * Requires: chroma run --path ../rag_database (in a separate terminal)
  */
 
+import { ChromaClient } from 'chromadb';
 import { Ollama } from 'ollama';
 import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
 import { fileURLToPath } from 'url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// ── Config ────────────────────────────────────────────────────────────────────
-
-const DOCS_PATH   = path.resolve(__dirname, '../docs');
-const DB_PATH     = path.resolve(__dirname, '../rag_database/js_store.json');
+const __dirname  = path.dirname(fileURLToPath(import.meta.url));
+const DOCS_PATH  = path.resolve(__dirname, '../docs');
 const EMBED_MODEL = 'nomic-embed-text';
-const LLM_MODEL   = 'qwen2.5:7b';
-const CHUNK_SIZE  = 500;
-const CHUNK_OVERLAP = 50;
+const LLM_MODEL  = 'qwen2.5:7b';
+const CHUNK_SIZE = 500;
+const OVERLAP    = 50;
 
-const ollama = new Ollama({ host: 'http://localhost:11434' });
+const ollama = new Ollama();
+const chroma = new ChromaClient();
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Text helpers ──────────────────────────────────────────────────────────────
 
-function cosineSimilarity(a, b) {
-  let dot = 0, magA = 0, magB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot  += a[i] * b[i];
-    magA += a[i] * a[i];
-    magB += b[i] * b[i];
-  }
-  const denom = Math.sqrt(magA) * Math.sqrt(magB);
-  return denom === 0 ? 0 : dot / denom;
-}
-
-function splitText(text, chunkSize = CHUNK_SIZE, overlap = CHUNK_OVERLAP) {
+function chunkText(text) {
   const chunks = [];
   let start = 0;
   while (start < text.length) {
-    const end = Math.min(start + chunkSize, text.length);
+    const end = Math.min(start + CHUNK_SIZE, text.length);
     const chunk = text.slice(start, end).trim();
     if (chunk) chunks.push(chunk);
     if (end === text.length) break;
-    start += chunkSize - overlap;
+    start += CHUNK_SIZE - OVERLAP;
   }
   return chunks;
 }
 
-function walkPDFs(dir) {
-  const files = [];
-  if (!fs.existsSync(dir)) return files;
+function findPDFs(dir) {
+  const results = [];
+  if (!fs.existsSync(dir)) return results;
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...walkPDFs(full));
-    } else if (entry.name.toLowerCase().endsWith('.pdf')) {
-      files.push(full);
-    }
+    if (entry.isDirectory()) results.push(...findPDFs(full));
+    else if (entry.name.toLowerCase().endsWith('.pdf')) results.push(full);
   }
-  return files;
+  return results;
 }
 
-function loadDB() {
-  if (!fs.existsSync(DB_PATH)) return null;
-  return JSON.parse(fs.readFileSync(DB_PATH, 'utf-8'));
-}
-
-// ── Core ──────────────────────────────────────────────────────────────────────
+// ── Commands ──────────────────────────────────────────────────────────────────
 
 async function build() {
-  console.log('📂 Loading PDFs...');
-
-  const pdfFiles = walkPDFs(DOCS_PATH);
-  if (pdfFiles.length === 0) {
-    console.log(`❌ No PDFs found in ${DOCS_PATH}/`);
+  const pdfFiles = findPDFs(DOCS_PATH);
+  if (!pdfFiles.length) {
+    console.log(`No PDFs found in ${DOCS_PATH}`);
     return;
   }
+  console.log(`Found ${pdfFiles.length} PDF(s). Parsing...`);
 
-  // Lazy import to avoid pdf-parse test runner on module load
   const { default: pdfParse } = await import('pdf-parse/lib/pdf-parse.js');
 
-  const allChunks = [];
-  for (const filePath of pdfFiles) {
-    const buffer = fs.readFileSync(filePath);
-    const data = await pdfParse(buffer);
-    for (const chunk of splitText(data.text)) {
-      allChunks.push({ text: chunk, source: filePath });
+  const chunks = [];
+  for (const file of pdfFiles) {
+    const data = await pdfParse(fs.readFileSync(file));
+    for (const chunk of chunkText(data.text)) {
+      chunks.push({ text: chunk, source: path.basename(file) });
     }
   }
+  console.log(`Split into ${chunks.length} chunks. Embedding...`);
 
-  console.log(`✂️  Splitting into ${allChunks.length} chunks...`);
-  console.log(`🧮 Creating embeddings...`);
+  const ids        = [];
+  const documents  = [];
+  const embeddings = [];
+  const metadatas  = [];
 
-  const records = [];
-  for (let i = 0; i < allChunks.length; i++) {
-    const { text, source } = allChunks[i];
+  for (let i = 0; i < chunks.length; i++) {
+    const { text, source } = chunks[i];
     const res = await ollama.embeddings({ model: EMBED_MODEL, prompt: text });
-    records.push({
-      id: `chunk_${i}`,
-      text,
-      metadata: { source },
-      embedding: res.embedding,
-    });
-    if ((i + 1) % 10 === 0) console.log(`  ${i + 1}/${allChunks.length}`);
+    ids.push(`chunk_${i}`);
+    documents.push(text);
+    embeddings.push(res.embedding);
+    metadatas.push({ source });
+    if ((i + 1) % 10 === 0) console.log(`  ${i + 1} / ${chunks.length}`);
   }
 
-  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-  fs.writeFileSync(DB_PATH, JSON.stringify(records));
-  console.log(`✅ Database built! ${records.length} chunks ready`);
+  try { await chroma.deleteCollection({ name: 'docs' }); } catch {}
+  const col = await chroma.createCollection({ name: 'docs' });
+  await col.add({ ids, documents, embeddings, metadatas });
+
+  console.log(`Done. ${chunks.length} chunks stored.`);
 }
 
 async function ask(question, showSources = false) {
-  const records = loadDB();
-  if (!records) {
-    console.log('❌ No database found. Run build first.');
-    return null;
+  let col;
+  try {
+    col = await chroma.getCollection({ name: 'docs' });
+  } catch {
+    return 'No database found. Run: node rag.js build';
   }
 
   const res = await ollama.embeddings({ model: EMBED_MODEL, prompt: question });
-  const qEmb = res.embedding;
+  const results = await col.query({ queryEmbeddings: [res.embedding], nResults: 3 });
 
-  const scored = records
-    .map(r => ({ ...r, score: cosineSimilarity(qEmb, r.embedding) }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 3);
+  if (!results.documents[0].length) return 'Nothing relevant found.';
 
-  if (scored.length === 0) return 'No relevant information found.';
-
-  const context = scored.map(r => r.text).join('\n\n');
-  const prompt = `Use this context to answer. If unsure, say so.\n\nContext:\n${context}\n\nQuestion: ${question}\n\nAnswer:`;
-
-  const response = await ollama.generate({ model: LLM_MODEL, prompt });
-  const answer = response.response;
+  const context = results.documents[0].join('\n\n');
+  const prompt  = `Answer using only this context. If unsure, say so.\n\nContext:\n${context}\n\nQuestion: ${question}\nAnswer:`;
+  const answer  = (await ollama.generate({ model: LLM_MODEL, prompt })).response;
 
   if (showSources) {
-    const sources = [...new Set(scored.map(r => path.basename(r.metadata.source)))];
-    return `${answer}\n\n📚 Sources: ${sources.join(', ')}`;
+    const sources = [...new Set(results.metadatas[0].map(m => m.source))];
+    return `${answer}\n\nSources: ${sources.join(', ')}`;
   }
   return answer;
 }
 
-function stats() {
-  const records = loadDB();
-  if (!records) {
-    console.log('❌ No database found. Run build first.');
-    return;
+async function stats() {
+  try {
+    const col   = await chroma.getCollection({ name: 'docs' });
+    const count = await col.count();
+    console.log(`Database: ${count} chunks`);
+  } catch {
+    console.log('No database found. Run: node rag.js build');
   }
-  console.log(`📊 Database has ${records.length} chunks`);
 }
 
 // ── Interactive REPL ──────────────────────────────────────────────────────────
 
 async function interactive() {
-  console.log('\n🤖 Simple Local RAG');
-  console.log('='.repeat(50));
-  stats();
-  console.log("\n💬 Ask questions (or 'quit' to exit)\n");
+  console.log('\nLocal RAG — type a question or "quit" to exit\n');
+  await stats();
+  console.log();
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-
-  const prompt = () => {
-    rl.question('❓ ', async (input) => {
-      const question = input.trim();
-      if (!question) { prompt(); return; }
-
-      if (['quit', 'exit', 'q'].includes(question.toLowerCase())) {
-        console.log('\n👋 Bye!');
-        rl.close();
-        return;
-      }
-
-      if (question.toLowerCase() === 'stats') {
-        stats();
-        console.log();
-        prompt();
-        return;
-      }
-
+  const next = () => {
+    rl.question('> ', async (line) => {
+      const q = line.trim();
+      if (!q) { next(); return; }
+      if (['quit', 'exit', 'q'].includes(q.toLowerCase())) { rl.close(); return; }
+      if (q.toLowerCase() === 'stats') { await stats(); next(); return; }
       try {
-        const answer = await ask(question, true);
-        if (answer) {
-          console.log(`\n💡 ${answer}\n`);
-          console.log('-'.repeat(50) + '\n');
-        }
+        console.log('\n' + await ask(q, true) + '\n');
       } catch (e) {
-        console.log(`\n❌ Error: ${e.message}\n`);
+        console.log('Error:', e.message);
       }
-      prompt();
+      next();
     });
   };
-
-  prompt();
+  next();
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+// ── Entry point ───────────────────────────────────────────────────────────────
 
-const command = process.argv[2];
+const [,, cmd, ...rest] = process.argv;
 
-if (command === 'build') {
-  build().catch(console.error);
-
-} else if (command === 'ask') {
-  const question = process.argv.slice(3).join(' ');
-  if (!question) {
-    console.log("Usage: node rag.js ask 'your question'");
-    process.exit(1);
-  }
-  console.log(`\n❓ ${question}\n`);
-  ask(question, true).then(answer => {
-    if (answer) console.log(`💡 ${answer}\n`);
-  }).catch(console.error);
-
-} else if (command === 'stats') {
-  stats();
-
-} else {
-  interactive();
+if      (cmd === 'build') build().catch(e => console.error('Error:', e.message));
+else if (cmd === 'stats') stats().catch(e => console.error('Error:', e.message));
+else if (cmd === 'ask') {
+  const q = rest.join(' ');
+  if (!q) { console.log("Usage: node rag.js ask 'your question'"); process.exit(1); }
+  ask(q, true).then(a => console.log('\n' + a + '\n')).catch(e => console.error('Error:', e.message));
 }
+else interactive();

@@ -13,8 +13,8 @@ import os
 
 class SimpleRAG:
     def __init__(self):
-        self.db_path = "./rag_database"
-        self.docs_path = "./docs"
+        self.db_path = "../rag_database"
+        self.docs_path = "../docs"
 
         # Local Ollama
         self.embeddings = OllamaEmbeddings(model="nomic-embed-text")

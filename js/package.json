@@ -9,6 +9,7 @@
     "serve": "node rag_web.js serve"
   },
   "dependencies": {
+    "chromadb": "^1.10.5",
     "express": "^4.19.2",
     "ollama": "^0.5.9",
     "pdf-parse": "^1.1.1"

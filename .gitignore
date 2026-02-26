@@ -1,4 +1,18 @@
+# macOS
 .DS_Store
+
+# Generated databases (auto-created by build commands)
 rag_database/*
-js/node_modules
+!rag_database/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# JavaScript
+js/node_modules/
 js/package-lock.json
+js/rag_database
