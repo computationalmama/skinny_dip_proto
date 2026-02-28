@@ -1,4 +1,4 @@
-# my_rag — Local RAG Chat
+# localrag — Local RAG Chat
 
 Ask questions about your own PDF documents. Fully offline — no API keys, no cloud, no data leaving your machine.
 
@@ -19,7 +19,7 @@ my_rag/
 │   ├── rag.py         ← CLI
 │   └── rag_web.py     ← web UI  →  http://localhost:6600
 │
-└── js/                ← JavaScript version (Express + JSON store)
+└── js/                ← JavaScript version (Express + ChromaDB)
     ├── README.md
     ├── package.json
     ├── rag.js         ← CLI
@@ -36,7 +36,7 @@ my_rag/
 | Web server | Flask | Express |
 | Embeddings | Ollama (`nomic-embed-text`) | Ollama (`nomic-embed-text`) |
 | LLM | Ollama (`qwen2.5:7b`) | Ollama (`qwen2.5:7b`) |
-| Vector store | ChromaDB (persistent) | JSON file + cosine similarity |
+| Vector store | ChromaDB (persistent) | ChromaDB |
 | PDF parsing | LangChain + PyPDF | pdf-parse |
 | Web port | 6600 | 6601 |
 
