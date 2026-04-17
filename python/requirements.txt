@@ -2,4 +2,5 @@ flask
 chromadb
 langchain
 langchain-community
+langchain-text-splitters
 pypdf
