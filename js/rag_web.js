@@ -143,6 +143,28 @@ app.post('/ask', async (req, res) => {
   }
 });
 
+app.get('/embeddings', async (_req, res) => {
+  let col;
+  try {
+    col = await chroma.getCollection({ name: 'docs' });
+  } catch {
+    return res.status(404).json({ error: 'Collection "docs" not found. Run: node rag_web.js build' });
+  }
+
+  const data = await col.get({ include: ['embeddings', 'documents', 'metadatas'] });
+  const chunks = data.ids.map((id, i) => ({
+    id,
+    text: data.documents[i],
+    source: data.metadatas[i]?.source || 'Unknown',
+    embedding: data.embeddings[i],
+  }));
+
+  res.json({ collection: 'docs', chunks });
+});
+
+app.get('/visualize.html', (_req, res) => res.sendFile(path.join(__dirname, 'visualize.html')));
+app.get('/visualize-d3.html', (_req, res) => res.sendFile(path.join(__dirname, 'visualize-d3.html')));
+
 app.get('/', (_req, res) => res.send(HTML));
 
 // ── HTML ──────────────────────────────────────────────────────────────────────
@@ -432,7 +454,9 @@ if (cmd === 'build') {
   }).catch(() => console.log('Warning: could not reach ChromaDB'));
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`\nOpen: http://localhost:${PORT}`);
+    console.log(`\nChat:        http://localhost:${PORT}`);
+    console.log(`Pools (p5):  http://localhost:${PORT}/visualize.html`);
+    console.log(`Pools (d3):  http://localhost:${PORT}/visualize-d3.html`);
     console.log('Ctrl+C to stop\n');
   });
 } else {

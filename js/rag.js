@@ -4,19 +4,19 @@
  * Requires: chroma run --path ../rag_database (in a separate terminal)
  */
 
-import { ChromaClient } from 'chromadb';
-import { Ollama } from 'ollama';
-import fs from 'fs';
-import path from 'path';
-import readline from 'readline';
-import { fileURLToPath } from 'url';
+import { ChromaClient } from "chromadb";
+import { Ollama } from "ollama";
+import fs from "fs";
+import path from "path";
+import readline from "readline";
+import { fileURLToPath } from "url";
 
-const __dirname  = path.dirname(fileURLToPath(import.meta.url));
-const DOCS_PATH  = path.resolve(__dirname, '../docs');
-const EMBED_MODEL = 'nomic-embed-text';
-const LLM_MODEL  = 'qwen2.5:7b';
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DOCS_PATH = path.resolve(__dirname, "../docs");
+const EMBED_MODEL = "nomic-embed-text";
+const LLM_MODEL = "qwen2.5:7b";
 const CHUNK_SIZE = 500;
-const OVERLAP    = 50;
+const OVERLAP = 50;
 
 const ollama = new Ollama();
 const chroma = new ChromaClient();
@@ -42,7 +42,7 @@ function findPDFs(dir) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) results.push(...findPDFs(full));
-    else if (entry.name.toLowerCase().endsWith('.pdf')) results.push(full);
+    else if (entry.name.toLowerCase().endsWith(".pdf")) results.push(full);
   }
   return results;
 }
@@ -57,7 +57,7 @@ async function build() {
   }
   console.log(`Found ${pdfFiles.length} PDF(s). Parsing...`);
 
-  const { default: pdfParse } = await import('pdf-parse/lib/pdf-parse.js');
+  const { default: pdfParse } = await import("pdf-parse/lib/pdf-parse.js");
 
   const chunks = [];
   for (const file of pdfFiles) {
@@ -68,10 +68,10 @@ async function build() {
   }
   console.log(`Split into ${chunks.length} chunks. Embedding...`);
 
-  const ids        = [];
-  const documents  = [];
+  const ids = [];
+  const documents = [];
   const embeddings = [];
-  const metadatas  = [];
+  const metadatas = [];
 
   for (let i = 0; i < chunks.length; i++) {
     const { text, source } = chunks[i];
@@ -83,8 +83,10 @@ async function build() {
     if ((i + 1) % 10 === 0) console.log(`  ${i + 1} / ${chunks.length}`);
   }
 
-  try { await chroma.deleteCollection({ name: 'docs' }); } catch {}
-  const col = await chroma.createCollection({ name: 'docs' });
+  try {
+    await chroma.deleteCollection({ name: "docs" });
+  } catch {}
+  const col = await chroma.createCollection({ name: "docs" });
   await col.add({ ids, documents, embeddings, metadatas });
 
   console.log(`Done. ${chunks.length} chunks stored.`);
@@ -93,34 +95,37 @@ async function build() {
 async function ask(question, showSources = false) {
   let col;
   try {
-    col = await chroma.getCollection({ name: 'docs' });
+    col = await chroma.getCollection({ name: "docs" });
   } catch {
-    return 'No database found. Run: node rag.js build';
+    return "No database found. Run: node rag.js build";
   }
 
   const res = await ollama.embeddings({ model: EMBED_MODEL, prompt: question });
-  const results = await col.query({ queryEmbeddings: [res.embedding], nResults: 3 });
+  const results = await col.query({
+    queryEmbeddings: [res.embedding],
+    nResults: 3,
+  });
 
-  if (!results.documents[0].length) return 'Nothing relevant found.';
+  if (!results.documents[0].length) return "Nothing relevant found.";
 
-  const context = results.documents[0].join('\n\n');
-  const prompt  = `Answer using only this context. If unsure, say so.\n\nContext:\n${context}\n\nQuestion: ${question}\nAnswer:`;
-  const answer  = (await ollama.generate({ model: LLM_MODEL, prompt })).response;
+  const context = results.documents[0].join("\n\n");
+  const prompt = `Answer using only this context. If unsure, say so.\n\nContext:\n${context}\n\nQuestion: ${question}\nAnswer:`;
+  const answer = (await ollama.generate({ model: LLM_MODEL, prompt })).response;
 
   if (showSources) {
-    const sources = [...new Set(results.metadatas[0].map(m => m.source))];
-    return `${answer}\n\nSources: ${sources.join(', ')}`;
+    const sources = [...new Set(results.metadatas[0].map((m) => m.source))];
+    return `${answer}\n\nSources: ${sources.join(", ")}`;
   }
   return answer;
 }
 
 async function stats() {
   try {
-    const col   = await chroma.getCollection({ name: 'docs' });
+    const col = await chroma.getCollection({ name: "docs" });
     const count = await col.count();
     console.log(`Database: ${count} chunks`);
   } catch {
-    console.log('No database found. Run: node rag.js build');
+    console.log("No database found. Run: node rag.js build");
   }
 }
 
@@ -131,17 +136,30 @@ async function interactive() {
   await stats();
   console.log();
 
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
   const next = () => {
-    rl.question('> ', async (line) => {
+    rl.question("> ", async (line) => {
       const q = line.trim();
-      if (!q) { next(); return; }
-      if (['quit', 'exit', 'q'].includes(q.toLowerCase())) { rl.close(); return; }
-      if (q.toLowerCase() === 'stats') { await stats(); next(); return; }
+      if (!q) {
+        next();
+        return;
+      }
+      if (["quit", "exit", "q"].includes(q.toLowerCase())) {
+        rl.close();
+        return;
+      }
+      if (q.toLowerCase() === "stats") {
+        await stats();
+        next();
+        return;
+      }
       try {
-        console.log('\n' + await ask(q, true) + '\n');
+        console.log("\n" + (await ask(q, true)) + "\n");
       } catch (e) {
-        console.log('Error:', e.message);
+        console.log("Error:", e.message);
       }
       next();
     });
@@ -149,15 +167,39 @@ async function interactive() {
   next();
 }
 
+async function visualize() {
+  let col;
+  try {
+    col = await chroma.getCollection({ name: "docs" });
+  } catch {
+    console.log("No database found. Run: node rag.js build");
+    return;
+  }
+
+  const results = await col.get({
+    include: ["embeddings", "documents"],
+  });
+
+  console.log("Documents (chunks):", results.documents);
+  console.log("Embeddings (vectors):", results.embeddings);
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-const [,, cmd, ...rest] = process.argv;
+const [, , cmd, ...rest] = process.argv;
 
-if      (cmd === 'build') build().catch(e => console.error('Error:', e.message));
-else if (cmd === 'stats') stats().catch(e => console.error('Error:', e.message));
-else if (cmd === 'ask') {
-  const q = rest.join(' ');
-  if (!q) { console.log("Usage: node rag.js ask 'your question'"); process.exit(1); }
-  ask(q, true).then(a => console.log('\n' + a + '\n')).catch(e => console.error('Error:', e.message));
-}
-else interactive();
+if (cmd === "build") build().catch((e) => console.error("Error:", e.message));
+else if (cmd === "stats")
+  stats().catch((e) => console.error("Error:", e.message));
+else if (cmd === "visualize")
+  visualize().catch((e) => console.error("Error:", e.message));
+else if (cmd === "ask") {
+  const q = rest.join(" ");
+  if (!q) {
+    console.log("Usage: node rag.js ask 'your question'");
+    process.exit(1);
+  }
+  ask(q, true)
+    .then((a) => console.log("\n" + a + "\n"))
+    .catch((e) => console.error("Error:", e.message));
+} else interactive();

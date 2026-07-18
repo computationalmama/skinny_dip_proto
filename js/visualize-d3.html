@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pools (D3)</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #f7f7f7;
+    overflow: hidden;
+  }
+
+  h1 {
+    position: absolute;
+    top: 18px;
+    left: 24px;
+    font-size: 20px;
+    font-weight: 600;
+    color: #222;
+    z-index: 5;
+  }
+
+  .frame {
+    position: absolute;
+    top: 60px;
+    left: 24px;
+    right: 24px;
+    bottom: 24px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    background: #fff;
+    overflow: hidden;
+  }
+
+  svg#viz {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  .topbar {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    z-index: 4;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: #fff;
+    border: 1px solid #ccc;
+    border-radius: 20px;
+    padding: 8px 10px 8px 18px;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+    color: #333;
+  }
+
+  .topbar .collection { font-weight: 600; }
+
+  .topbar button {
+    font-family: inherit;
+    font-size: 12px;
+    border: 1px solid #ccc;
+    background: #fafafa;
+    border-radius: 14px;
+    padding: 6px 14px;
+    cursor: pointer;
+    color: #333;
+  }
+
+  .topbar button:hover { background: #eee; }
+
+  .zoom {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    z-index: 4;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #fff;
+  }
+
+  .zoom button {
+    width: 32px;
+    height: 32px;
+    border: none;
+    background: #fff;
+    font-size: 16px;
+    cursor: pointer;
+    color: #333;
+  }
+
+  .zoom button:first-child { border-bottom: 1px solid #ccc; }
+  .zoom button:hover { background: #eee; }
+
+  .status {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 3;
+    font-size: 13px;
+    color: #888;
+  }
+
+  .tooltip {
+    position: absolute;
+    z-index: 6;
+    pointer-events: none;
+    background: rgba(30, 30, 30, 0.92);
+    color: #fff;
+    padding: 8px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    max-width: 260px;
+    line-height: 1.4;
+    display: none;
+  }
+
+  .detail-title {
+    position: absolute;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 4;
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 1.5px;
+    color: #333;
+    display: none;
+  }
+
+  #backBtn { display: none; }
+
+  .note-card {
+    position: absolute;
+    z-index: 8;
+    width: 190px;
+    background: #fff;
+    border: 1px solid #ccc;
+    border-radius: 10px;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+    padding: 10px 12px;
+  }
+
+  .note-close {
+    position: absolute;
+    top: 4px;
+    right: 8px;
+    border: none;
+    background: none;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    color: #999;
+  }
+
+  .note-close:hover { color: #000; }
+
+  .note-source {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #999;
+    margin-bottom: 6px;
+    padding-right: 14px;
+  }
+
+  .note-text {
+    font-size: 12px;
+    line-height: 1.5;
+    color: #333;
+    white-space: pre-wrap;
+  }
+</style>
+</head>
+<body>
+  <h1>Pools (D3)</h1>
+  <div class="frame">
+    <svg id="viz">
+      <defs>
+        <filter id="blob-blur" x="-100%" y="-100%" width="300%" height="300%">
+          <feGaussianBlur stdDeviation="8" />
+        </filter>
+        <radialGradient id="detail-gradient" cx="50%" cy="50%" r="70%">
+          <stop offset="0%" stop-color="#ffffff" />
+          <stop offset="100%" stop-color="#d8d8d8" />
+        </radialGradient>
+      </defs>
+      <g class="viewport">
+        <g class="overview">
+          <g class="links"></g>
+          <g class="blobs"></g>
+          <g class="labels"></g>
+        </g>
+        <g class="detail" style="display:none">
+          <rect class="detail-bg" x="-3000" y="-3000" width="6000" height="6000" fill="url(#detail-gradient)"></rect>
+          <g class="doc-links"></g>
+          <g class="doc-boxes"></g>
+          <g class="markers"></g>
+        </g>
+      </g>
+      <g class="connectors"></g>
+    </svg>
+    <div class="topbar">
+      <button id="backBtn">&larr; Pools</button>
+      <span class="collection">COLLECTION</span>
+      <button id="uploadBtn">+ UPLOAD</button>
+    </div>
+    <div class="detail-title" id="detailTitle"></div>
+    <div class="zoom">
+      <button id="zoomIn">+</button>
+      <button id="zoomOut">&minus;</button>
+    </div>
+    <div class="status" id="status">Loading embeddings...</div>
+    <div class="tooltip" id="tooltip"></div>
+  </div>
+
+<script>
+const STOPWORDS = new Set([
+  'this','that','these','those','with','from','have','has','had','were','was',
+  'been','being','they','them','their','there','then','than','which','what',
+  'when','where','while','about','into','over','under','after','before',
+  'through','during','between','because','also','some','such','only','very',
+  'more','most','other','each','every','both','same','just','will','would',
+  'should','could','shall','must','might','does','done','doing','your','ours',
+  'yours','herself','himself','itself','ourselves','themselves','being',
+  'here','above','below','again','further','once','page','pages','document',
+  'section','including','including','http','https','www'
+]);
+
+let statusEl, tooltipEl, detailTitleEl, backBtnEl, frameEl;
+let svg, viewport, overviewLayer, linkLayer, blobLayer, labelLayer;
+let detailLayer, docLinkLayer, docBoxLayer, markerLayer, connectorLayer;
+let zoomBehavior;
+
+let mode = 'overview';       // 'overview' | 'detail'
+let activePool = null;
+let detailScene = null;      // { docBoxes, markers }
+let openCards = [];          // { marker, el }
+
+async function loadData() {
+  const res = await fetch('/embeddings');
+  const data = await res.json();
+  if (data.error) {
+    statusEl.textContent = data.error;
+    return;
+  }
+  document.querySelector('.collection').textContent = data.collection.toUpperCase();
+
+  const chunks = data.chunks;
+  const k = Math.min(6, Math.max(3, Math.round(Math.sqrt(chunks.length / 2))));
+  const { assignments, centroids } = kmeans(chunks.map(c => c.embedding), k);
+  const { nodes, links } = buildPools(chunks, assignments, centroids);
+  runSimulation(nodes, links);
+  statusEl.style.display = 'none';
+}
+
+// ---- math helpers (same approach as the p5 version, see VISUALIZE.md) ----
+
+function cosineSim(a, b) {
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+  return dot / (Math.sqrt(na) * Math.sqrt(nb) + 1e-10);
+}
+
+function kmeans(vectors, k, iterations = 25) {
+  const n = vectors.length;
+  const dim = vectors[0].length;
+  const centroids = [vectors[Math.floor(Math.random() * n)].slice()];
+
+  while (centroids.length < k) {
+    const dists = vectors.map(v => {
+      let minD = Infinity;
+      for (const c of centroids) minD = Math.min(minD, 1 - cosineSim(v, c));
+      return minD * minD;
+    });
+    const total = dists.reduce((a, b) => a + b, 0) || 1;
+    let r = Math.random() * total, idx = 0;
+    for (; idx < n - 1; idx++) { r -= dists[idx]; if (r <= 0) break; }
+    centroids.push(vectors[idx].slice());
+  }
+
+  let assignments = new Array(n).fill(0);
+  for (let iter = 0; iter < iterations; iter++) {
+    let changed = false;
+    for (let i = 0; i < n; i++) {
+      let best = 0, bestSim = -Infinity;
+      for (let c = 0; c < k; c++) {
+        const s = cosineSim(vectors[i], centroids[c]);
+        if (s > bestSim) { bestSim = s; best = c; }
+      }
+      if (assignments[i] !== best) { assignments[i] = best; changed = true; }
+    }
+    const sums = Array.from({ length: k }, () => new Array(dim).fill(0));
+    const counts = new Array(k).fill(0);
+    for (let i = 0; i < n; i++) {
+      const c = assignments[i];
+      counts[c]++;
+      const v = vectors[i];
+      for (let d = 0; d < dim; d++) sums[c][d] += v[d];
+    }
+    for (let c = 0; c < k; c++) {
+      if (!counts[c]) continue;
+      for (let d = 0; d < dim; d++) centroids[c][d] = sums[c][d] / counts[c];
+    }
+    if (!changed && iter > 0) break;
+  }
+  return { assignments, centroids };
+}
+
+function truncateLabel(text, max = 20) {
+  return text.length > max ? text.slice(0, max - 1) + '…' : text;
+}
+
+function extractLabel(text) {
+  const words = text.toLowerCase().match(/[a-z]{4,}/g) || [];
+  const freq = {};
+  for (const w of words) {
+    if (STOPWORDS.has(w)) continue;
+    freq[w] = (freq[w] || 0) + 1;
+  }
+  const top = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([w]) => w.toUpperCase());
+  return top.length ? top.join(' ') : 'POOL';
+}
+
+// ---- turn clusters into d3-force nodes/links ----
+
+function buildPools(chunks, assignments, centroids) {
+  const k = centroids.length;
+  const groups = Array.from({ length: k }, () => []);
+  assignments.forEach((c, i) => groups[c].push(chunks[i]));
+
+  const nodes = [];
+  const activeCentroids = [];
+  groups.forEach((members, i) => {
+    if (!members.length) return;
+    const sourceCounts = {};
+    members.forEach(m => { sourceCounts[m.source] = (sourceCounts[m.source] || 0) + 1; });
+    const dominant = Object.entries(sourceCounts).sort((a, b) => b[1] - a[1])[0][0];
+
+    const baseR = 18 + Math.sqrt(members.length) * 14;
+    const blobCount = 5 + Math.floor(Math.random() * 3);
+    const blobs = Array.from({ length: blobCount }, () => ({
+      dx: (Math.random() - 0.5) * baseR,
+      dy: (Math.random() - 0.5) * baseR,
+      r: baseR * (0.55 + Math.random() * 0.5),
+    }));
+
+    nodes.push({
+      id: nodes.length,
+      label: extractLabel(members.map(m => m.text).join(' ')),
+      count: members.length,
+      sources: sourceCounts,
+      dominant,
+      members,
+      r: baseR,
+      blobs,
+    });
+    activeCentroids.push(centroids[i]);
+  });
+
+  const links = [];
+  for (let i = 0; i < activeCentroids.length; i++) {
+    for (let j = i + 1; j < activeCentroids.length; j++) {
+      const sim = cosineSim(activeCentroids[i], activeCentroids[j]);
+      if (sim > 0.3) links.push({ source: nodes[i].id, target: nodes[j].id, sim });
+    }
+  }
+
+  return { nodes, links };
+}
+
+// ---- d3-force layout + render ----
+
+function runSimulation(nodes, links) {
+  d3.forceSimulation(nodes)
+    .force('charge', d3.forceManyBody().strength(-500))
+    .force('link', d3.forceLink(links).id(d => d.id).distance(d => 220 * (1 - d.sim)).strength(d => d.sim * 0.5))
+    .force('collide', d3.forceCollide().radius(d => d.r + 24))
+    .force('center', d3.forceCenter(0, 0))
+    .on('tick', () => render(nodes, links));
+}
+
+function render(nodes, links) {
+  if (mode !== 'overview') return;
+
+  linkLayer.selectAll('line')
+    .data(links)
+    .join('line')
+    .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+    .attr('x2', d => d.target.x).attr('y2', d => d.target.y)
+    .attr('stroke', '#000')
+    .attr('stroke-opacity', d => 0.12 + d.sim * 0.25)
+    .attr('stroke-width', d => Math.max(0.5, d.sim * 2));
+
+  const blobs = blobLayer.selectAll('g.blob')
+    .data(nodes, d => d.id)
+    .join(enter => {
+      const g = enter.append('g').attr('class', 'blob').style('filter', 'url(#blob-blur)');
+      g.each(function (d) {
+        d3.select(this).selectAll('circle')
+          .data(d.blobs)
+          .join('circle')
+          .attr('cx', b => b.dx)
+          .attr('cy', b => b.dy)
+          .attr('r', b => b.r)
+          .attr('fill', 'rgba(70,70,70,0.32)');
+      });
+      return g;
+    });
+
+  blobs
+    .attr('transform', d => `translate(${d.x},${d.y})`)
+    .style('cursor', 'pointer')
+    .on('click', (_event, d) => enterDetail(d))
+    .on('mousemove', (event, d) => showTooltip(event, d))
+    .on('mouseleave', hideTooltip);
+
+  labelLayer.selectAll('text')
+    .data(nodes, d => d.id)
+    .join('text')
+    .attr('x', d => d.x).attr('y', d => d.y)
+    .attr('text-anchor', 'middle')
+    .attr('dominant-baseline', 'middle')
+    .style('font-weight', 700)
+    .style('font-size', '12px')
+    .style('fill', '#222')
+    .style('pointer-events', 'none')
+    .text(d => d.label);
+}
+
+// ---- hover tooltip ----
+
+function showTooltip(event, pool) {
+  const [x, y] = d3.pointer(event, document.querySelector('.frame'));
+  tooltipEl.style.display = 'block';
+  tooltipEl.style.left = (x + 16) + 'px';
+  tooltipEl.style.top = (y + 16) + 'px';
+  tooltipEl.textContent = `${pool.count} chunk${pool.count === 1 ? '' : 's'} · mostly ${pool.dominant} · click to read`;
+}
+
+function hideTooltip() { tooltipEl.style.display = 'none'; }
+
+// ---- zoomed-in pool detail view: PDFs as boxes, chunks as clickable dots ----
+
+function buildDetailScene(pool) {
+  const sources = Object.keys(pool.sources);
+
+  const docBoxes = sources.map((source, i) => {
+    const n = sources.length;
+    const x = (i - (n - 1) / 2) * 170;
+    const y = i % 2 === 0 ? -30 : 30; // slight stagger, same idea as the mockup
+    return { source, x, y, w: 130, h: 170 };
+  });
+
+  const markers = [];
+  for (const box of docBoxes) {
+    const chunksForDoc = pool.members.filter(m => m.source === box.source);
+    chunksForDoc.forEach((chunk, i) => {
+      markers.push({
+        id: chunk.id,
+        chunk,
+        x: box.x - box.w / 2 + 18 + (i % 4) * 26,
+        y: box.y + box.h / 2 + 22 + Math.floor(i / 4) * 24,
+      });
+    });
+  }
+
+  const docPairs = [];
+  for (let i = 0; i < docBoxes.length; i++) {
+    for (let j = i + 1; j < docBoxes.length; j++) docPairs.push([docBoxes[i], docBoxes[j]]);
+  }
+
+  return { docBoxes, markers, docPairs };
+}
+
+function enterDetail(pool) {
+  mode = 'detail';
+  activePool = pool;
+  detailScene = buildDetailScene(pool);
+  clearCards();
+
+  overviewLayer.style('display', 'none');
+  detailLayer.style('display', null);
+  hideTooltip();
+
+  detailTitleEl.textContent = pool.label;
+  detailTitleEl.style.display = 'block';
+  backBtnEl.style.display = 'inline-flex';
+
+  svg.call(zoomBehavior.transform, d3.zoomIdentity.translate(frameEl.clientWidth / 2, frameEl.clientHeight / 2));
+  renderDetail();
+}
+
+function exitDetail() {
+  mode = 'overview';
+  activePool = null;
+  detailScene = null;
+  clearCards();
+
+  detailLayer.style('display', 'none');
+  overviewLayer.style('display', null);
+  detailTitleEl.style.display = 'none';
+  backBtnEl.style.display = 'none';
+
+  svg.call(zoomBehavior.transform, d3.zoomIdentity.translate(frameEl.clientWidth / 2, frameEl.clientHeight / 2));
+}
+
+function renderDetail() {
+  const { docBoxes, markers, docPairs } = detailScene;
+
+  docLinkLayer.selectAll('line.doc-link')
+    .data(docPairs)
+    .join('line')
+    .attr('class', 'doc-link')
+    .attr('x1', d => d[0].x).attr('y1', d => d[0].y)
+    .attr('x2', d => d[1].x).attr('y2', d => d[1].y)
+    .attr('stroke', '#999')
+    .attr('stroke-dasharray', '4 4');
+
+  docLinkLayer.selectAll('text.doc-link-icon')
+    .data(docPairs)
+    .join('text')
+    .attr('class', 'doc-link-icon')
+    .attr('x', d => (d[0].x + d[1].x) / 2)
+    .attr('y', d => (d[0].y + d[1].y) / 2)
+    .attr('text-anchor', 'middle')
+    .attr('dominant-baseline', 'middle')
+    .style('font-size', '16px')
+    .text('🔗');
+
+  const boxes = docBoxLayer.selectAll('g.docbox')
+    .data(docBoxes, d => d.source)
+    .join(enter => {
+      const g = enter.append('g').attr('class', 'docbox');
+      g.append('rect').append('title');
+      g.append('text').attr('class', 'docbox-label');
+      return g;
+    });
+
+  boxes.select('rect title').text(d => d.source);
+
+  boxes.attr('transform', d => `translate(${d.x},${d.y})`);
+  boxes.select('rect')
+    .attr('x', d => -d.w / 2).attr('y', d => -d.h / 2)
+    .attr('width', d => d.w).attr('height', d => d.h)
+    .attr('rx', 8)
+    .attr('fill', '#9a9a9a')
+    .attr('stroke', '#7c7c7c');
+  boxes.select('text')
+    .attr('x', d => -d.w / 2 + 10)
+    .attr('y', d => d.h / 2 - 14)
+    .style('font-size', '10px')
+    .style('fill', '#333')
+    .text(d => truncateLabel(d.source));
+
+  const markerSel = markerLayer.selectAll('g.marker')
+    .data(markers, d => d.id)
+    .join(enter => {
+      const g = enter.append('g').attr('class', 'marker').style('cursor', 'pointer');
+      g.append('circle').attr('r', 8);
+      return g;
+    });
+
+  markerSel
+    .attr('transform', d => `translate(${d.x},${d.y})`)
+    .on('click', (_event, d) => toggleCard(d))
+    .select('circle')
+    .attr('fill', d => openCards.some(c => c.marker.id === d.id) ? '#F5A623' : '#333');
+}
+
+function projectPoint(x, y) {
+  const t = d3.zoomTransform(svg.node());
+  return { x: t.x + x * t.k, y: t.y + y * t.k };
+}
+
+function clearCards() {
+  openCards.forEach(c => c.el.remove());
+  openCards = [];
+  connectorLayer.selectAll('*').remove();
+}
+
+function toggleCard(marker) {
+  const idx = openCards.findIndex(c => c.marker.id === marker.id);
+  if (idx >= 0) {
+    openCards[idx].el.remove();
+    openCards.splice(idx, 1);
+    repositionCards();
+    renderDetail();
+    return;
+  }
+
+  const el = document.createElement('div');
+  el.className = 'note-card';
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'note-close';
+  closeBtn.textContent = '×';
+  closeBtn.onclick = () => toggleCard(marker);
+
+  const src = document.createElement('div');
+  src.className = 'note-source';
+  src.textContent = marker.chunk.source;
+
+  const text = document.createElement('div');
+  text.className = 'note-text';
+  text.textContent = marker.chunk.text;
+
+  el.appendChild(closeBtn);
+  el.appendChild(src);
+  el.appendChild(text);
+  frameEl.appendChild(el);
+
+  openCards.push({ marker, el });
+  repositionCards();
+  renderDetail();
+}
+
+function repositionCards() {
+  connectorLayer.selectAll('*').remove();
+  const frameW = frameEl.clientWidth;
+  const frameH = frameEl.clientHeight;
+
+  openCards.forEach((card, i) => {
+    const p = projectPoint(card.marker.x, card.marker.y);
+    let cardX = Math.min(p.x + 28, frameW - 210);
+    let cardY = Math.min(Math.max(p.y - 30 + i * 8, 10), frameH - 170);
+
+    card.el.style.left = cardX + 'px';
+    card.el.style.top = cardY + 'px';
+
+    connectorLayer.append('line')
+      .attr('x1', p.x).attr('y1', p.y)
+      .attr('x2', cardX).attr('y2', cardY)
+      .attr('stroke', '#999')
+      .attr('stroke-dasharray', '3 3');
+  });
+}
+
+// ---- boot ----
+
+function init() {
+  frameEl = document.querySelector('.frame');
+  statusEl = document.getElementById('status');
+  tooltipEl = document.getElementById('tooltip');
+  detailTitleEl = document.getElementById('detailTitle');
+  backBtnEl = document.getElementById('backBtn');
+
+  svg = d3.select('#viz');
+  viewport = svg.select('.viewport');
+  overviewLayer = viewport.select('.overview');
+  linkLayer = overviewLayer.select('.links');
+  blobLayer = overviewLayer.select('.blobs');
+  labelLayer = overviewLayer.select('.labels');
+
+  detailLayer = viewport.select('.detail');
+  docLinkLayer = detailLayer.select('.doc-links');
+  docBoxLayer = detailLayer.select('.doc-boxes');
+  markerLayer = detailLayer.select('.markers');
+  connectorLayer = svg.select('.connectors');
+
+  zoomBehavior = d3.zoom()
+    .scaleExtent([0.3, 3])
+    .clickDistance(5) // lets a small drag still register as a click on a blob/marker
+    .on('zoom', (event) => {
+      viewport.attr('transform', event.transform);
+      if (mode === 'detail') repositionCards();
+    });
+
+  svg.call(zoomBehavior)
+     .call(zoomBehavior.transform, d3.zoomIdentity.translate(frameEl.clientWidth / 2, frameEl.clientHeight / 2));
+
+  document.getElementById('zoomIn').onclick = () => svg.transition().duration(200).call(zoomBehavior.scaleBy, 1.2);
+  document.getElementById('zoomOut').onclick = () => svg.transition().duration(200).call(zoomBehavior.scaleBy, 1 / 1.2);
+  document.getElementById('uploadBtn').onclick = () => alert('Reindexing not wired up yet — run "node rag_web.js build" to add new PDFs.');
+  backBtnEl.onclick = exitDetail;
+
+  loadData();
+}
+
+init();
+</script>
+</body>
+</html>

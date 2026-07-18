@@ -13,12 +13,6 @@ my_rag/
 │
 ├── docs/              ← drop your PDFs here
 │
-├── python/            ← Python version (Flask + ChromaDB)
-│   ├── README.md
-│   ├── requirements.txt
-│   ├── rag.py         ← CLI
-│   └── rag_web.py     ← web UI  →  http://localhost:6600
-│
 └── js/                ← JavaScript version (Express + ChromaDB)
     ├── README.md
     ├── package.json
@@ -30,15 +24,15 @@ my_rag/
 
 ## Stack
 
-| | Python | JavaScript |
-|---|---|---|
-| Language | Python 3.9+ | Node.js 18+ |
-| Web server | Flask | Express |
-| Embeddings | Ollama (`nomic-embed-text`) | Ollama (`nomic-embed-text`) |
-| LLM | Ollama (`qwen2.5:7b`) | Ollama (`qwen2.5:7b`) |
-| Vector store | ChromaDB (persistent) | ChromaDB |
-| PDF parsing | LangChain + PyPDF | pdf-parse |
-| Web port | 6600 | 6601 |
+|  | JavaScript |
+|---|---|
+| Language |  Node.js 18+ |
+| Web server |  Express |
+| Embeddings |  Ollama (`nomic-embed-text`) |
+| LLM |  Ollama (`qwen2.5:7b`) |
+| Vector store |  ChromaDB |
+| PDF parsing |  pdf-parse |
+| Web port |  6601 |
 
 ---
 
@@ -59,26 +53,9 @@ Copy PDF files into the `docs/` folder.
 
 ### 3. Pick a version and follow its README
 
-- **Python** → see [`python/README.md`](python/README.md)
 - **JavaScript** → see [`js/README.md`](js/README.md)
 
 ---
 
-## Commands at a glance
-
-| Action | Python | JavaScript |
-|---|---|---|
-| Install deps | `pip install -r requirements.txt` | `npm install` |
-| Build database | `python rag_web.py build` | `node rag_web.js build` |
-| Start web UI | `python rag_web.py serve` | `node rag_web.js serve` |
-| Interactive CLI | `python rag.py` | `node rag.js` |
-| Ask one question | `python rag.py ask "..."` | `node rag.js ask "..."` |
-| Check DB stats | `python rag.py stats` | `node rag.js stats` |
-
----
-
 ## Notes
-
-- The Python and JS versions use **separate databases** — you need to run `build` once for each version you want to use
-- Both databases are gitignored and auto-generated
-- You can run both web servers at the same time (different ports) to compare them side by side
+You can check out more info about the embedding viz in the doc: [VISUALIZE](js/VISUALIZE.md)

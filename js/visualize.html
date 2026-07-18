@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pools</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #f7f7f7;
+    overflow: hidden;
+  }
+
+  h1 {
+    position: absolute;
+    top: 18px;
+    left: 24px;
+    font-size: 20px;
+    font-weight: 600;
+    color: #222;
+    z-index: 5;
+  }
+
+  .frame {
+    position: absolute;
+    top: 60px;
+    left: 24px;
+    right: 24px;
+    bottom: 24px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    background: #fff;
+    overflow: hidden;
+  }
+
+  .topbar {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    z-index: 4;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: #fff;
+    border: 1px solid #ccc;
+    border-radius: 20px;
+    padding: 8px 10px 8px 18px;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+    color: #333;
+  }
+
+  .topbar .collection {
+    font-weight: 600;
+  }
+
+  .topbar button {
+    font-family: inherit;
+    font-size: 12px;
+    border: 1px solid #ccc;
+    background: #fafafa;
+    border-radius: 14px;
+    padding: 6px 14px;
+    cursor: pointer;
+    color: #333;
+  }
+
+  .topbar button:hover { background: #eee; }
+
+  .zoom {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    z-index: 4;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #fff;
+  }
+
+  .zoom button {
+    width: 32px;
+    height: 32px;
+    border: none;
+    background: #fff;
+    font-size: 16px;
+    cursor: pointer;
+    color: #333;
+  }
+
+  .zoom button:first-child { border-bottom: 1px solid #ccc; }
+  .zoom button:hover { background: #eee; }
+
+  .status {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 3;
+    font-size: 13px;
+    color: #888;
+  }
+
+  .tooltip {
+    position: absolute;
+    z-index: 6;
+    pointer-events: none;
+    background: rgba(30, 30, 30, 0.92);
+    color: #fff;
+    padding: 8px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    max-width: 260px;
+    line-height: 1.4;
+    display: none;
+  }
+
+  .panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 340px;
+    max-width: 80%;
+    background: #fff;
+    border-left: 1px solid #ccc;
+    box-shadow: -4px 0 12px rgba(0, 0, 0, 0.08);
+    z-index: 7;
+    display: none;
+    flex-direction: column;
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 16px 16px 0 16px;
+  }
+
+  .panel-header h2 {
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: #222;
+  }
+
+  .panel-close {
+    border: none;
+    background: none;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    color: #666;
+    padding: 0 4px;
+  }
+
+  .panel-close:hover { color: #000; }
+
+  .panel-subtitle {
+    padding: 4px 16px 12px 16px;
+    font-size: 12px;
+    color: #888;
+    border-bottom: 1px solid #eee;
+  }
+
+  .panel-list {
+    overflow-y: auto;
+    padding: 12px 16px 16px 16px;
+    flex: 1;
+  }
+
+  .chunk-card {
+    border: 1px solid #e5e5e5;
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    background: #fafafa;
+  }
+
+  .chunk-source {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #999;
+    margin-bottom: 6px;
+  }
+
+  .chunk-text {
+    font-size: 13px;
+    line-height: 1.5;
+    color: #333;
+    white-space: pre-wrap;
+  }
+</style>
+</head>
+<body>
+  <h1>Pools</h1>
+  <div class="frame">
+    <div class="topbar">
+      <span class="collection">COLLECTION</span>
+      <button id="uploadBtn">+ UPLOAD</button>
+    </div>
+    <div class="zoom">
+      <button id="zoomIn">+</button>
+      <button id="zoomOut">&minus;</button>
+    </div>
+    <div class="status" id="status">Loading embeddings...</div>
+    <div class="tooltip" id="tooltip"></div>
+    <div class="panel" id="panel"></div>
+  </div>
+
+<script>
+const STOPWORDS = new Set([
+  'this','that','these','those','with','from','have','has','had','were','was',
+  'been','being','they','them','their','there','then','than','which','what',
+  'when','where','while','about','into','over','under','after','before',
+  'through','during','between','because','also','some','such','only','very',
+  'more','most','other','each','every','both','same','just','will','would',
+  'should','could','shall','must','might','does','done','doing','your','ours',
+  'yours','herself','himself','itself','ourselves','themselves','being',
+  'here','above','below','again','further','once','page','pages','document',
+  'section','including','including','http','https','www'
+]);
+
+let chunks = [];
+let pools = [];       // { label, x, y, r, count, sources }
+let edges = [];       // { a, b, sim }
+let panX = 0, panY = 0;
+let zoom = 1;
+let dragging = false;
+let pressX = 0, pressY = 0;
+let statusEl, tooltipEl, panelEl;
+
+async function loadData() {
+  const res = await fetch('/embeddings');
+  const data = await res.json();
+  if (data.error) {
+    statusEl.textContent = data.error;
+    return;
+  }
+  chunks = data.chunks;
+  document.querySelector('.collection').textContent = data.collection.toUpperCase();
+
+  const k = Math.min(6, Math.max(3, Math.round(Math.sqrt(chunks.length / 2))));
+  const { assignments, centroids } = kmeans(chunks.map(c => c.embedding), k);
+  buildPools(assignments, centroids);
+  statusEl.style.display = 'none';
+}
+
+// ---- math helpers ----
+
+function cosineSim(a, b) {
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+  return dot / (Math.sqrt(na) * Math.sqrt(nb) + 1e-10);
+}
+
+function kmeans(vectors, k, iterations = 25) {
+  const n = vectors.length;
+  const dim = vectors[0].length;
+  const centroids = [vectors[Math.floor(Math.random() * n)].slice()];
+
+  while (centroids.length < k) {
+    const dists = vectors.map(v => {
+      let minD = Infinity;
+      for (const c of centroids) minD = Math.min(minD, 1 - cosineSim(v, c));
+      return minD * minD;
+    });
+    const total = dists.reduce((a, b) => a + b, 0) || 1;
+    let r = Math.random() * total, idx = 0;
+    for (; idx < n - 1; idx++) { r -= dists[idx]; if (r <= 0) break; }
+    centroids.push(vectors[idx].slice());
+  }
+
+  let assignments = new Array(n).fill(0);
+  for (let iter = 0; iter < iterations; iter++) {
+    let changed = false;
+    for (let i = 0; i < n; i++) {
+      let best = 0, bestSim = -Infinity;
+      for (let c = 0; c < k; c++) {
+        const s = cosineSim(vectors[i], centroids[c]);
+        if (s > bestSim) { bestSim = s; best = c; }
+      }
+      if (assignments[i] !== best) { assignments[i] = best; changed = true; }
+    }
+    const sums = Array.from({ length: k }, () => new Array(dim).fill(0));
+    const counts = new Array(k).fill(0);
+    for (let i = 0; i < n; i++) {
+      const c = assignments[i];
+      counts[c]++;
+      const v = vectors[i];
+      for (let d = 0; d < dim; d++) sums[c][d] += v[d];
+    }
+    for (let c = 0; c < k; c++) {
+      if (!counts[c]) continue;
+      for (let d = 0; d < dim; d++) centroids[c][d] = sums[c][d] / counts[c];
+    }
+    if (!changed && iter > 0) break;
+  }
+  return { assignments, centroids };
+}
+
+function extractLabel(text) {
+  const words = text.toLowerCase().match(/[a-z]{4,}/g) || [];
+  const freq = {};
+  for (const w of words) {
+    if (STOPWORDS.has(w)) continue;
+    freq[w] = (freq[w] || 0) + 1;
+  }
+  const top = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([w]) => w.toUpperCase());
+  return top.length ? top.join(' ') : 'POOL';
+}
+
+function buildPools(assignments, centroids) {
+  const k = centroids.length;
+  const groups = Array.from({ length: k }, () => []);
+  assignments.forEach((c, i) => groups[c].push(chunks[i]));
+
+  const active = [];
+  const activeCentroids = [];
+  groups.forEach((members, i) => {
+    if (!members.length) return;
+    const sourceCounts = {};
+    members.forEach(m => { sourceCounts[m.source] = (sourceCounts[m.source] || 0) + 1; });
+    const dominant = Object.entries(sourceCounts).sort((a, b) => b[1] - a[1])[0][0];
+    active.push({
+      label: extractLabel(members.map(m => m.text).join(' ')),
+      count: members.length,
+      sources: sourceCounts,
+      dominant,
+      members,
+    });
+    activeCentroids.push(centroids[i]);
+  });
+
+  edges = [];
+  for (let i = 0; i < activeCentroids.length; i++) {
+    for (let j = i + 1; j < activeCentroids.length; j++) {
+      const sim = cosineSim(activeCentroids[i], activeCentroids[j]);
+      if (sim > 0.3) edges.push({ a: i, b: j, sim });
+    }
+  }
+
+  const nodes = active.map((_, i) => ({
+    x: Math.cos((i / active.length) * Math.PI * 2) * 220,
+    y: Math.sin((i / active.length) * Math.PI * 2) * 220,
+    vx: 0, vy: 0,
+  }));
+
+  for (let step = 0; step < 300; step++) {
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const dx = nodes[j].x - nodes[i].x, dy = nodes[j].y - nodes[i].y;
+        const distSq = Math.max(dx * dx + dy * dy, 1);
+        const dist = Math.sqrt(distSq);
+        const force = 30000 / distSq;
+        const fx = (dx / dist) * force, fy = (dy / dist) * force;
+        nodes[i].vx -= fx; nodes[i].vy -= fy;
+        nodes[j].vx += fx; nodes[j].vy += fy;
+      }
+    }
+    for (const { a, b, sim } of edges) {
+      const dx = nodes[b].x - nodes[a].x, dy = nodes[b].y - nodes[a].y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const targetDist = 220 * (1 - sim);
+      const force = (dist - targetDist) * 0.02 * sim;
+      const fx = (dx / dist) * force, fy = (dy / dist) * force;
+      nodes[a].vx += fx; nodes[a].vy += fy;
+      nodes[b].vx -= fx; nodes[b].vy -= fy;
+    }
+    for (const n of nodes) {
+      n.vx *= 0.85; n.vy *= 0.85;
+      n.x += n.vx * 0.01; n.y += n.vy * 0.01;
+    }
+  }
+
+  pools = active.map((p, i) => {
+    const blobCount = 5 + Math.floor(Math.random() * 3);
+    const baseR = 18 + Math.sqrt(p.count) * 14;
+    const blobs = Array.from({ length: blobCount }, () => ({
+      dx: (Math.random() - 0.5) * baseR,
+      dy: (Math.random() - 0.5) * baseR,
+      r: baseR * (0.55 + Math.random() * 0.5),
+    }));
+    return { ...p, x: nodes[i].x, y: nodes[i].y, r: baseR, blobs };
+  });
+}
+
+// ---- p5 sketch ----
+
+function setup() {
+  const frame = document.querySelector('.frame');
+  const canvas = createCanvas(frame.clientWidth, frame.clientHeight);
+  canvas.parent(frame);
+  statusEl = document.getElementById('status');
+  tooltipEl = document.getElementById('tooltip');
+  panelEl = document.getElementById('panel');
+  textAlign(CENTER, CENTER);
+  loadData();
+
+  document.getElementById('zoomIn').onclick = () => zoom = Math.min(3, zoom * 1.2);
+  document.getElementById('zoomOut').onclick = () => zoom = Math.max(0.3, zoom / 1.2);
+  document.getElementById('uploadBtn').onclick = () => alert('Reindexing not wired up yet — run "node rag_web.js build" to add new PDFs.');
+}
+
+function windowResized() {
+  const frame = document.querySelector('.frame');
+  resizeCanvas(frame.clientWidth, frame.clientHeight);
+}
+
+function toScreen(x, y) {
+  return { x: width / 2 + panX + x * zoom, y: height / 2 + panY + y * zoom };
+}
+
+function toWorld(x, y) {
+  return { x: (x - width / 2 - panX) / zoom, y: (y - height / 2 - panY) / zoom };
+}
+
+function draw() {
+  background(255);
+  if (!pools.length) return;
+
+  // connecting lines
+  stroke(0, 0, 0, 40);
+  for (const { a, b, sim } of edges) {
+    const pa = toScreen(pools[a].x, pools[a].y);
+    const pb = toScreen(pools[b].x, pools[b].y);
+    strokeWeight(Math.max(0.5, sim * 2));
+    stroke(0, 0, 0, 30 + sim * 60);
+    line(pa.x, pa.y, pb.x, pb.y);
+  }
+
+  // blurred pool blobs
+  noStroke();
+  for (const p of pools) {
+    const center = toScreen(p.x, p.y);
+    drawingContext.filter = 'blur(16px)';
+    fill(70, 70, 70, 70);
+    for (const b of p.blobs) {
+      circle(center.x + b.dx * zoom, center.y + b.dy * zoom, b.r * 2 * zoom);
+    }
+    drawingContext.filter = 'none';
+  }
+
+  // labels
+  fill(30);
+  noStroke();
+  textStyle(BOLD);
+  textSize(12);
+  for (const p of pools) {
+    const center = toScreen(p.x, p.y);
+    text(p.label, center.x, center.y);
+  }
+
+  updateTooltip();
+}
+
+function poolUnderMouse() {
+  const w = toWorld(mouseX, mouseY);
+  for (const p of pools) {
+    const d = Math.hypot(w.x - p.x, w.y - p.y);
+    if (d < p.r) return p;
+  }
+  return null;
+}
+
+function updateTooltip() {
+  const hovered = poolUnderMouse();
+  cursor(hovered ? HAND : ARROW);
+  if (hovered) {
+    tooltipEl.style.display = 'block';
+    tooltipEl.style.left = (mouseX + 16) + 'px';
+    tooltipEl.style.top = (mouseY + 16) + 'px';
+    tooltipEl.textContent = `${hovered.count} chunk${hovered.count === 1 ? '' : 's'} · mostly ${hovered.dominant} · click to read`;
+  } else {
+    tooltipEl.style.display = 'none';
+  }
+}
+
+function showPanel(pool) {
+  panelEl.innerHTML = '';
+
+  const header = document.createElement('div');
+  header.className = 'panel-header';
+
+  const title = document.createElement('h2');
+  title.textContent = pool.label;
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'panel-close';
+  closeBtn.textContent = '×';
+  closeBtn.onclick = () => { panelEl.style.display = 'none'; };
+
+  header.appendChild(title);
+  header.appendChild(closeBtn);
+
+  const subtitle = document.createElement('div');
+  subtitle.className = 'panel-subtitle';
+  subtitle.textContent = `${pool.count} chunk${pool.count === 1 ? '' : 's'} · mostly ${pool.dominant}`;
+
+  const list = document.createElement('div');
+  list.className = 'panel-list';
+  for (const chunk of pool.members) {
+    const card = document.createElement('div');
+    card.className = 'chunk-card';
+
+    const src = document.createElement('div');
+    src.className = 'chunk-source';
+    src.textContent = chunk.source;
+
+    const text = document.createElement('div');
+    text.className = 'chunk-text';
+    text.textContent = chunk.text;
+
+    card.appendChild(src);
+    card.appendChild(text);
+    list.appendChild(card);
+  }
+
+  panelEl.appendChild(header);
+  panelEl.appendChild(subtitle);
+  panelEl.appendChild(list);
+  panelEl.style.display = 'flex';
+}
+
+function mousePressed() {
+  if (mouseY < 0 || mouseY > height || mouseX < 0 || mouseX > width) return;
+  dragging = true;
+  pressX = mouseX;
+  pressY = mouseY;
+}
+
+function mouseReleased() { dragging = false; }
+
+function mouseDragged() {
+  if (!dragging) return;
+  panX += movedX;
+  panY += movedY;
+}
+
+function mouseClicked() {
+  const moved = Math.hypot(mouseX - pressX, mouseY - pressY);
+  if (moved > 5) return; // was a drag/pan, not a click
+  const hit = poolUnderMouse();
+  if (hit) showPanel(hit);
+}
+
+function mouseWheel(event) {
+  zoom = Math.min(3, Math.max(0.3, zoom * Math.exp(-event.delta * 0.001)));
+  return false;
+}
+</script>
+</body>
+</html>

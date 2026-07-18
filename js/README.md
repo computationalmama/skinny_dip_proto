@@ -14,12 +14,17 @@ ollama pull nomic-embed-text
 ollama pull qwen2.5:7b
 
 # 2. Install ChromaDB (Python package — provides the database server)
+python3 venv/bin/activate
 pip install chromadb
+chroma run --path ./rag_database
 
 # 3. Install Node dependencies
 cd js
 npm install
 ```
+## Test here
+
+You can test the visualizations here: http://localhost:6601/visualize-d3.html 
 
 ## Starting ChromaDB
 
@@ -27,7 +32,7 @@ The JS version connects to ChromaDB running as a local HTTP server.
 You need to start it in a separate terminal before running any commands:
 
 ```bash
-# Run this from the project root (my_rag/)
+# Run this from the project root (skinny_dip_proto/)
 chroma run --path ./rag_database
 ```
 
