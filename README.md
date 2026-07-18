@@ -1,15 +1,10 @@
-# localrag — Local RAG Chat
-
-Ask questions about your own PDF documents. Fully offline — no API keys, no cloud, no data leaving your machine.
-
-Available in **Python** and **JavaScript**. Both versions share the same `docs/` folder.
-
+# skinny dip proto
 ---
 
 ## Project Structure
 
 ```
-my_rag/
+skinny_dip_proto/
 │
 ├── docs/              ← drop your PDFs here
 │
