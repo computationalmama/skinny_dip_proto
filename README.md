@@ -1,6 +1,5 @@
 # skinny dip proto
 ---
-
 ## Project Structure
 
 ```
@@ -32,6 +31,9 @@ skinny_dip_proto/
 ---
 
 ## Quick Start
+### 0. Clone the repo
+ 
+`git clone https://github.com/computationalmama/skinny_dip_proto.git`
 
 ### 1. Install Ollama and pull models
 
@@ -46,7 +48,7 @@ ollama pull qwen2.5:7b
 
 Copy PDF files into the `docs/` folder.
 
-### 3. Pick a version and follow its README
+### 3. Install README link
 
 - **JavaScript** → see [`js/README.md`](js/README.md)
 
