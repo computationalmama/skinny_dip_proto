@@ -10,17 +10,23 @@ import { Ollama } from 'ollama';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { config } from './config.js';
+import {
+  createEmbeddingFunction,
+  generateEmbedding,
+  usesChromaEmbeddingFunction,
+  getEmbeddingInfo,
+} from './embeddings.js';
 
 const __dirname   = path.dirname(fileURLToPath(import.meta.url));
 const DOCS_PATH   = path.resolve(__dirname, '../docs');
-const EMBED_MODEL = 'nomic-embed-text';
-const LLM_MODEL   = 'qwen2.5:7b';
-const CHUNK_SIZE  = 500;
-const OVERLAP     = 50;
+const CHUNK_SIZE  = config.rag.chunkSize;
+const OVERLAP     = config.rag.overlap;
 const PORT        = 6601;
 
 const ollama = new Ollama();
 const chroma = new ChromaClient();
+const embeddingFunction = createEmbeddingFunction();
 const app    = express();
 app.use(express.json());
 
@@ -59,6 +65,7 @@ async function build() {
     return false;
   }
   console.log(`Found ${pdfFiles.length} PDF(s). Parsing...`);
+  console.log(`Using embeddings: ${getEmbeddingInfo()}`);
 
   const { default: pdfParse } = await import('pdf-parse/lib/pdf-parse.js');
 
@@ -73,22 +80,55 @@ async function build() {
 
   const ids        = [];
   const documents  = [];
-  const embeddings = [];
   const metadatas  = [];
 
   for (let i = 0; i < chunks.length; i++) {
     const { text, source } = chunks[i];
-    const res = await ollama.embeddings({ model: EMBED_MODEL, prompt: text });
     ids.push(`chunk_${i}`);
     documents.push(text);
-    embeddings.push(res.embedding);
     metadatas.push({ source });
-    if ((i + 1) % 10 === 0) console.log(`  ${i + 1} / ${chunks.length}`);
   }
 
   try { await chroma.deleteCollection({ name: 'docs' }); } catch {}
-  const col = await chroma.createCollection({ name: 'docs' });
-  await col.add({ ids, documents, embeddings, metadatas });
+
+  // Create collection with embedding function if using OpenAI/
+  
+  const collectionConfig = { name: 'docs' };
+  if (usesChromaEmbeddingFunction()) {
+    collectionConfig.embeddingFunction = embeddingFunction;
+  }
+  const col = await chroma.createCollection(collectionConfig);
+
+  // For Ollama, we need to generate embeddings manually
+  if (!usesChromaEmbeddingFunction()) {
+    const embeddings = [];
+    for (let i = 0; i < documents.length; i++) {
+      const embedding = await generateEmbedding(documents[i]);
+      embeddings.push(embedding);
+      if ((i + 1) % 10 === 0) console.log(`  ${i + 1} / ${documents.length}`);
+    }
+    await col.add({ ids, documents, embeddings, metadatas });
+  } else {
+    // For OpenAI/Google, ChromaDB handles embeddings but we need to batch
+    // Google has a limit of 100 requests per batch
+    const batchSize = config.EMBEDDING_PROVIDER.toLowerCase() === 'google' ||
+                      config.EMBEDDING_PROVIDER.toLowerCase() === 'gemini' ? 100 : 1000;
+
+    for (let i = 0; i < documents.length; i += batchSize) {
+      const end = Math.min(i + batchSize, documents.length);
+      const batchIds = ids.slice(i, end);
+      const batchDocs = documents.slice(i, end);
+      const batchMetas = metadatas.slice(i, end);
+
+      await col.add({
+        ids: batchIds,
+        documents: batchDocs,
+        metadatas: batchMetas
+      });
+
+      console.log(`  ${end} / ${documents.length}`);
+    }
+  }
 
   console.log(`Done. ${chunks.length} chunks stored.`);
   return true;
@@ -97,13 +137,31 @@ async function build() {
 async function query(question) {
   let col;
   try {
-    col = await chroma.getCollection({ name: 'docs' });
+    // Get collection with embedding function if using OpenAI/Google
+    const collectionConfig = { name: 'docs' };
+    if (usesChromaEmbeddingFunction()) {
+      collectionConfig.embeddingFunction = embeddingFunction;
+    }
+    col = await chroma.getCollection(collectionConfig);
   } catch {
     return { answer: 'Database not found. Run: node rag_web.js build', sources: [], error: true };
   }
 
-  const res     = await ollama.embeddings({ model: EMBED_MODEL, prompt: question });
-  const results = await col.query({ queryEmbeddings: [res.embedding], nResults: 3 });
+  let results;
+  if (usesChromaEmbeddingFunction()) {
+    // For OpenAI/Google, ChromaDB handles query embeddings automatically
+    results = await col.query({
+      queryTexts: [question],
+      nResults: config.rag.nResults,
+    });
+  } else {
+    // For Ollama, generate embeddings manually
+    const embedding = await generateEmbedding(question);
+    results = await col.query({
+      queryEmbeddings: [embedding],
+      nResults: config.rag.nResults,
+    });
+  }
 
   if (!results.documents[0].length) {
     return { answer: 'Nothing relevant found in the documents.', sources: [], error: false };
@@ -111,7 +169,7 @@ async function query(question) {
 
   const context = results.documents[0].join('\n\n');
   const prompt  = `Answer using only this context. If unsure, say so.\n\nContext:\n${context}\n\nQuestion: ${question}\nAnswer:`;
-  const answer  = (await ollama.generate({ model: LLM_MODEL, prompt })).response;
+  const answer  = (await ollama.generate({ model: config.llm.model, prompt })).response;
   const sources = [...new Set(results.metadatas[0].map(m => m.source))];
 
   return { answer, sources, error: false };
@@ -146,7 +204,11 @@ app.post('/ask', async (req, res) => {
 app.get('/embeddings', async (_req, res) => {
   let col;
   try {
-    col = await chroma.getCollection({ name: 'docs' });
+    const collectionConfig = { name: 'docs' };
+    if (usesChromaEmbeddingFunction()) {
+      collectionConfig.embeddingFunction = embeddingFunction;
+    }
+    col = await chroma.getCollection(collectionConfig);
   } catch {
     return res.status(404).json({ error: 'Collection "docs" not found. Run: node rag_web.js build' });
   }

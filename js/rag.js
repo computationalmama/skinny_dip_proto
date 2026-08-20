@@ -10,84 +10,126 @@ import fs from "fs";
 import path from "path";
 import readline from "readline";
 import { fileURLToPath } from "url";
+import { config } from "./config.js";
+import {
+  createEmbeddingFunction,
+  generateEmbedding,
+  usesChromaEmbeddingFunction,
+  getEmbeddingInfo,
+} from "./embeddings.js";
+import { findDocuments, parseDocument } from "./parsers.js";
+import { chunkText, getChunkingInfo } from "./chunking.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DOCS_PATH = path.resolve(__dirname, "../docs");
-const EMBED_MODEL = "nomic-embed-text";
-const LLM_MODEL = "qwen2.5:7b";
-const CHUNK_SIZE = 500;
-const OVERLAP = 50;
 
 const ollama = new Ollama();
 const chroma = new ChromaClient();
-
-// ── Text helpers ──────────────────────────────────────────────────────────────
-
-function chunkText(text) {
-  const chunks = [];
-  let start = 0;
-  while (start < text.length) {
-    const end = Math.min(start + CHUNK_SIZE, text.length);
-    const chunk = text.slice(start, end).trim();
-    if (chunk) chunks.push(chunk);
-    if (end === text.length) break;
-    start += CHUNK_SIZE - OVERLAP;
-  }
-  return chunks;
-}
-
-function findPDFs(dir) {
-  const results = [];
-  if (!fs.existsSync(dir)) return results;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) results.push(...findPDFs(full));
-    else if (entry.name.toLowerCase().endsWith(".pdf")) results.push(full);
-  }
-  return results;
-}
+const embeddingFunction = createEmbeddingFunction();
 
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 async function build() {
-  const pdfFiles = findPDFs(DOCS_PATH);
-  if (!pdfFiles.length) {
-    console.log(`No PDFs found in ${DOCS_PATH}`);
+  const documents = findDocuments(DOCS_PATH);
+  if (!documents.length) {
+    console.log(`No documents found in ${DOCS_PATH}`);
+    console.log(`Supported formats: .pdf, .md, .jsonl`);
     return;
   }
-  console.log(`Found ${pdfFiles.length} PDF(s). Parsing...`);
 
-  const { default: pdfParse } = await import("pdf-parse/lib/pdf-parse.js");
+  // Count by type
+  const typeCounts = {};
+  documents.forEach(doc => {
+    typeCounts[doc.type] = (typeCounts[doc.type] || 0) + 1;
+  });
+
+  console.log(`Found ${documents.length} document(s):`);
+  Object.entries(typeCounts).forEach(([type, count]) => {
+    console.log(`  - ${count} ${type.toUpperCase()} file(s)`);
+  });
+  console.log(`Using embeddings: ${getEmbeddingInfo()}`);
+  console.log(`Chunking strategy: ${getChunkingInfo()}`);
+  console.log('Parsing...');
 
   const chunks = [];
-  for (const file of pdfFiles) {
-    const data = await pdfParse(fs.readFileSync(file));
-    for (const chunk of chunkText(data.text)) {
-      chunks.push({ text: chunk, source: path.basename(file) });
+  for (const doc of documents) {
+    try {
+      const text = await parseDocument(doc.path);
+      if (!text || !text.trim()) {
+        console.warn(`  Skipping ${doc.name} - no text content`);
+        continue;
+      }
+
+      // Use smart chunking with file type awareness
+      const docChunks = chunkText(text, doc.type);
+      for (const chunk of docChunks) {
+        chunks.push({ text: chunk, source: doc.name });
+      }
+      console.log(`  ✓ ${doc.name} (${doc.type}) - ${docChunks.length} chunks`);
+    } catch (error) {
+      console.error(`  ✗ ${doc.name} - ${error.message}`);
     }
   }
+
+  if (!chunks.length) {
+    console.log('No text content extracted from documents.');
+    return;
+  }
+
   console.log(`Split into ${chunks.length} chunks. Embedding...`);
 
   const ids = [];
-  const documents = [];
-  const embeddings = [];
+  const chunkTexts = [];
   const metadatas = [];
 
   for (let i = 0; i < chunks.length; i++) {
     const { text, source } = chunks[i];
-    const res = await ollama.embeddings({ model: EMBED_MODEL, prompt: text });
     ids.push(`chunk_${i}`);
-    documents.push(text);
-    embeddings.push(res.embedding);
+    chunkTexts.push(text);
     metadatas.push({ source });
-    if ((i + 1) % 10 === 0) console.log(`  ${i + 1} / ${chunks.length}`);
   }
 
   try {
     await chroma.deleteCollection({ name: "docs" });
   } catch {}
-  const col = await chroma.createCollection({ name: "docs" });
-  await col.add({ ids, documents, embeddings, metadatas });
+
+  // Create collection with embedding function if using OpenAI/Google
+  const collectionConfig = { name: "docs" };
+  if (usesChromaEmbeddingFunction()) {
+    collectionConfig.embeddingFunction = embeddingFunction;
+  }
+  const col = await chroma.createCollection(collectionConfig);
+
+  // For Ollama, we need to generate embeddings manually
+  if (!usesChromaEmbeddingFunction()) {
+    const embeddings = [];
+    for (let i = 0; i < chunkTexts.length; i++) {
+      const embedding = await generateEmbedding(chunkTexts[i]);
+      embeddings.push(embedding);
+      if ((i + 1) % 10 === 0) console.log(`  ${i + 1} / ${chunkTexts.length}`);
+    }
+    await col.add({ ids, documents: chunkTexts, embeddings, metadatas });
+  } else {
+    // For OpenAI/Google, ChromaDB handles embeddings but we need to batch
+    // Google has a limit of 100 requests per batch
+    const batchSize = config.EMBEDDING_PROVIDER.toLowerCase() === 'google' ||
+                      config.EMBEDDING_PROVIDER.toLowerCase() === 'gemini' ? 100 : 1000;
+
+    for (let i = 0; i < chunkTexts.length; i += batchSize) {
+      const end = Math.min(i + batchSize, chunkTexts.length);
+      const batchIds = ids.slice(i, end);
+      const batchDocs = chunkTexts.slice(i, end);
+      const batchMetas = metadatas.slice(i, end);
+
+      await col.add({
+        ids: batchIds,
+        documents: batchDocs,
+        metadatas: batchMetas
+      });
+
+      console.log(`  ${end} / ${chunkTexts.length}`);
+    }
+  }
 
   console.log(`Done. ${chunks.length} chunks stored.`);
 }
@@ -95,22 +137,37 @@ async function build() {
 async function ask(question, showSources = false) {
   let col;
   try {
-    col = await chroma.getCollection({ name: "docs" });
+    // Get collection with embedding function if using OpenAI/Google
+    const collectionConfig = { name: "docs" };
+    if (usesChromaEmbeddingFunction()) {
+      collectionConfig.embeddingFunction = embeddingFunction;
+    }
+    col = await chroma.getCollection(collectionConfig);
   } catch {
     return "No database found. Run: node rag.js build";
   }
 
-  const res = await ollama.embeddings({ model: EMBED_MODEL, prompt: question });
-  const results = await col.query({
-    queryEmbeddings: [res.embedding],
-    nResults: 3,
-  });
+  let results;
+  if (usesChromaEmbeddingFunction()) {
+    // For OpenAI/Google, ChromaDB handles query embeddings automatically
+    results = await col.query({
+      queryTexts: [question],
+      nResults: config.rag.nResults,
+    });
+  } else {
+    // For Ollama, generate embeddings manually
+    const embedding = await generateEmbedding(question);
+    results = await col.query({
+      queryEmbeddings: [embedding],
+      nResults: config.rag.nResults,
+    });
+  }
 
   if (!results.documents[0].length) return "Nothing relevant found.";
 
   const context = results.documents[0].join("\n\n");
   const prompt = `Answer using only this context. If unsure, say so.\n\nContext:\n${context}\n\nQuestion: ${question}\nAnswer:`;
-  const answer = (await ollama.generate({ model: LLM_MODEL, prompt })).response;
+  const answer = (await ollama.generate({ model: config.llm.model, prompt })).response;
 
   if (showSources) {
     const sources = [...new Set(results.metadatas[0].map((m) => m.source))];
