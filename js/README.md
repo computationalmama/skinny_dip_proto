@@ -209,7 +209,76 @@ calls of which ~340 are grounded searches. It resumes — passages already in
 `data/zoom.json` are skipped — so an interrupted run only costs what it hadn't
 reached, and `--limit N` does a handful at a time.
 
-The other three pills and the ask box are **still inert**. Every one of them
+### The ask box
+
+The one move that genuinely runs live, and the reason there's a Worker.
+
+Everything else the canvas does is precomputed, because the set of questions is
+finite: 283 passages, so all 283 answers fit in an export and a click is a
+lookup. A typed question isn't finite, so it goes out over the network.
+
+Locally that's `/ask-passage`, which has the key already. Hosted, there's no
+server — so two things move:
+
+**The key goes to a Cloudflare Worker** (`worker/`). The page asks the Worker,
+the Worker asks Gemini, and the key never reaches a browser. It exposes exactly
+two operations, `embed` and `generate`, on two fixed models — deliberately not
+an open Gemini proxy — behind an origin allowlist, a body cap, a prompt cap and
+a per-isolate rate limiter. Those are speed bumps, not a boundary: an Origin
+header is forgeable and the limiter resets with the isolate. Anyone who loads
+the page can spend the quota, which is fine for a link shared inside a team and
+not fine for a link posted publicly. For that, add a Cloudflare rate-limiting
+rule in the dashboard, which is enforced at the edge.
+
+**Retrieval moves into the browser**, since ChromaDB isn't on the host. The chunk
+vectors ship as `data/vectors-768.bin` and the cosine runs in JS — at 283 vectors
+the loop is faster than the network call before it. They're truncated from 3072
+dims to 768 and renormalised, which `gemini-embedding-001` supports (it's
+Matryoshka-trained). Measured over six realistic questions:
+
+| dims | top-1 same | top-5 overlap | payload |
+| --- | --- | --- | --- |
+| 3072 | 6/6 | 30/30 | 3396 kB |
+| 1536 | 6/6 | 27/30 | 1698 kB |
+| **768** | **6/6** | **27/30** | **849 kB** |
+
+1536 is no better than 768, so 768 it is. The file is fetched only when someone
+actually asks something. `truncate` in `seeds/ask.js` mirrors the one in
+`vectors.js` — if they ever diverge the cosines become meaningless, so they're
+commented to say so.
+
+The Worker also unwraps Gemini's citation redirects, which the browser can't do
+(CORS hides the `Location` header). So live links are real destinations, the same
+as the exported ones.
+
+Prompts live in `ask-prompts.js` and are imported by both the browser path and
+the local route, so the hosted answers can't drift from the local ones.
+
+#### Setting up the Worker
+
+```bash
+cd worker
+npx wrangler secret put GOOGLE_API_KEY   # paste the key, once
+npx wrangler deploy                      # prints the URL
+```
+
+Then point the canvas at it and redeploy:
+
+```bash
+cd ../js
+PROXY_URL=https://skinny-dip-gemini.<you>.workers.dev npm run export:static
+npm run deploy
+```
+
+The URL lands in `data/config.json` rather than the bundle, so changing it later
+is a re-export, not a rebuild. With no `PROXY_URL` set the ask box says it has no
+proxy and everything else works as normal — the site is fully functional without
+one.
+
+Add your Pages origin to `ALLOWED_ORIGINS` in `worker/worker.js` if it isn't
+`computationalmama.github.io`.
+
+The other three pills are **still inert**. Every one of them
 calls `runAction(action, payload)` in `ChunkNode` — the single seam. Adding a
 move means a row in `ACTIONS` (id, label, colour) and a branch in `runAction`;
 `spawn()` and `actionEdge()` handle placing the results and labelling the edge.
@@ -305,7 +374,9 @@ never touched and `main` stays free of build artifacts.
 | --- | --- |
 | `data/provocations.json` | `provocations_with_sources.csv`, parsed — the tray samples its ten in the browser |
 | `data/search.json` | The whole cosine ranking, ~140 kB |
-| `data/zoom.json` | Zoom in, precomputed per passage — only with `--zoom` |
+| `data/zoom.json` | Zoom in and Zoom out, precomputed per passage — only with `--zoom` |
+| `data/vectors-768.bin` | Chunk vectors for the ask box's in-browser retrieval |
+| `data/config.json` | The Worker URL, so it can change without a rebuild |
 | `index.html`, `seeds.html` | The same shell, so the bare URL is the share link |
 | `static/seeds.{js,css}` | `npm run build:seeds:static` |
 
@@ -348,11 +419,12 @@ moment of the click.
 
 ### What can't come along
 
-- **The ask box and the three unwired pills.** Free text needs a live embedding
-  and a live model, and that needs a key the browser can't be given. They're
-  inert on Pages exactly as they're inert locally, so nothing regresses — but
-  wiring them up later means either asking each visitor for their own Gemini key
-  or putting a small proxy in front.
+- **The three unwired pills.** Inert on Pages exactly as they're inert locally,
+  so nothing regresses. Each is a branch in `runAction`; the ask box shows the
+  pattern for wiring a live one.
+- **The ask box used to be here.** It now works via the Worker — see
+  [The ask box](#the-ask-box). It's the only move that costs anything at view
+  time, and the only one that can fail for network reasons.
 - **The `/` chat page.** It generates with local Ollama. Not hostable.
 - **The `visualize-*.html` pages.** They pull `/embeddings` live. Exportable the
   same way if wanted (~3.5 MB of vectors, or ~870 kB truncated to 768 dims), but

@@ -7,12 +7,15 @@ skinny_dip_proto/
 │
 ├── docs/              ← drop your documents here (.pdf, .md, .jsonl)
 │
-└── js/                ← JavaScript version (Express + ChromaDB)
-    ├── README.md
-    ├── package.json
-    ├── rag.js         ← CLI
-    ├── rag_web.js     ← web UI  →  http://localhost:6601
-    └── export-static.js ← seeds canvas as a static site  →  dist/
+├── js/                ← JavaScript version (Express + ChromaDB)
+│   ├── README.md
+│   ├── package.json
+│   ├── rag.js         ← CLI
+│   ├── rag_web.js     ← web UI  →  http://localhost:6601
+│   └── export-static.js ← seeds canvas as a static site  →  dist/
+│
+└── worker/            ← Cloudflare Worker holding the Gemini key, so the
+                          hosted canvas can answer typed questions live
 ```
 
 The seeds canvas also runs with no server at all — `npm run export:static`
