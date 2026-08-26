@@ -30,91 +30,20 @@
  */
 
 import { generate, resolveLinks } from './gemini.js';
+import {
+  CORPUS_SCHEMA,
+  MODES,
+  PLAN_SCHEMA,
+  corpusBoxesPrompt,
+  planPrompt,
+  webBoxPrompt,
+} from './zoom-prompts.js';
 
 /** How many passages each retrieval pulls back. */
 const QUERY_N = 3;     // hits per planned query, for box 2
 const MAX_LINKS = 4;   // per box
 
 const URL_RE = /https?:\/\/[^\s)"'\]]+/g;
-
-/**
- * What each pill asks for, and where in the ranking it reads.
- *
- * `band` is a [skip, take] slice of the passage's own neighbours, after the
- * passage itself is dropped. Zoom in reads from the top; zoom out steps past
- * the first two, which in this corpus are usually the adjacent chunks of the
- * same paragraph and so say nothing the passage doesn't.
- */
-const MODES = {
-  in: {
-    band: [0, 5],
-    titles: { source: 'In this corpus', related: 'Related threads' },
-
-    planAsk: `- topic: the concept this passage is really about, in under eight words.
-- corpusQueries: two or three short search queries for finding OTHER passages in
-  the same corpus that give related examples, contrasting cases, or background.
-  Make them different from each other, and don't just restate the passage.
-- webQuestion: one question to ask the open web that would add what the corpus
-  can't — a named project, an organisation, a real-world outcome, a date.`,
-
-    corpusAsk: `- source: what this passage is claiming and what the surrounding corpus adds to
-  it — the argument it sits inside, and any specific project, place or figure
-  the nearby passages name. 45-70 words.
-- related: the other threads in the corpus this connects to — concrete examples
-  and adjacent topics, named. Say how they relate, don't just list them. 45-70
-  words.`,
-
-    webAsk: 'Name the specific projects, organisations, places and dates you find.',
-  },
-
-  out: {
-    band: [2, 6],
-    titles: { source: 'The bigger picture', related: 'Across the corpus' },
-
-    planAsk: `- topic: the wider field, debate or category this passage is one instance of, in
-  under eight words. Go up a level from what the passage literally says.
-- corpusQueries: two or three short search queries for finding passages about
-  that WIDER subject rather than this passage's specifics — the general
-  argument, the pattern it's an example of, positions that disagree with it.
-  Make them different from each other, and deliberately broader than the
-  passage.
-- webQuestion: one question to ask the open web about the wider context — the
-  history of this idea, the movement or field it belongs to, who else works on
-  it, how it's argued about.`,
-
-    corpusAsk: `- source: the larger argument this passage is one move in. What is the debate,
-  and where does this land in it? Name the position, not just the passage.
-  45-70 words.
-- related: where else the corpus deals with this same pattern — other examples
-  of it, adjacent topics, and anything that cuts against it. Named, and with
-  the connection stated. 45-70 words.`,
-
-    webAsk: `Situate it: name the field, the movement, the people arguing about it, and when.
-Prefer breadth over the single closest example.`,
-  },
-};
-
-const PLAN_SCHEMA = {
-  type: 'object',
-  properties: {
-    topic: { type: 'string' },
-    corpusQueries: { type: 'array', items: { type: 'string' } },
-    webQuestion: { type: 'string' },
-  },
-  required: ['topic', 'corpusQueries', 'webQuestion'],
-};
-
-const CORPUS_SCHEMA = {
-  type: 'object',
-  properties: {
-    source: { type: 'string' },
-    related: { type: 'string' },
-  },
-  required: ['source', 'related'],
-};
-
-const passageList = (passages) =>
-  passages.map((p, i) => `[${i + 1}] ${p.text}`).join('\n\n');
 
 /** Links a passage quotes inline — the only outward link a corpus box can have. */
 function inlineLinks(passages) {
@@ -140,20 +69,7 @@ function inlineLinks(passages) {
 // ── Steps ─────────────────────────────────────────────────────────────────────
 
 async function plan(text, mode) {
-  const { json } = await generate(
-    `You are helping someone read a passage from a research corpus about small,
-community-scale and decentralised AI.
-
-PASSAGE:
-"""${text}"""
-
-Decide what would be worth looking up to ${mode === 'out'
-  ? 'situate it in its broader context'
-  : 'understand it better'}:
-
-${MODES[mode].planAsk}`,
-    { schema: PLAN_SCHEMA },
-  );
+  const { json } = await generate(planPrompt(text, mode), { schema: PLAN_SCHEMA });
 
   return {
     topic: json.topic?.trim() || '',
@@ -163,27 +79,9 @@ ${MODES[mode].planAsk}`,
 }
 
 async function corpusBoxes(text, topic, near, related, mode) {
-  const { titles, corpusAsk } = MODES[mode];
-
+  const { titles } = MODES[mode];
   const { json } = await generate(
-    `Write two short notes for a reader ${mode === 'out'
-      ? 'stepping back from'
-      : 'looking closely at'} one passage from a corpus about small,
-community-scale and decentralised AI. The topic is "${topic}".
-
-THE PASSAGE:
-"""${text}"""
-
-OTHER PASSAGES FROM THE SAME CORPUS, NEAR THIS ONE:
-${passageList(near) || '(none)'}
-
-PASSAGES FOUND BY SEARCHING ${mode === 'out' ? 'WIDER' : 'RELATED'} ANGLES:
-${passageList(related) || '(none)'}
-
-${corpusAsk}
-
-Only use what is in the passages above; do not add outside knowledge here.
-Plain prose, no headings, no bullet points, no citation markers.`,
+    corpusBoxesPrompt({ text, topic, near, related, mode }),
     { schema: CORPUS_SCHEMA },
   );
 
@@ -205,18 +103,31 @@ Plain prose, no headings, no bullet points, no citation markers.`,
   ];
 }
 
+/**
+ * The web box. Schema-free, and retried once.
+ *
+ * Two things had to be worked around, and both still apply wherever this runs.
+ *
+ * A responseSchema on a grounded call makes the API drop groundingMetadata
+ * entirely — the model still searches and the answer is still grounded, but the
+ * citations never come back. The links are half the point of this box, so it
+ * takes prose. (See webBoxPrompt in zoom-prompts.js, which is never given one.)
+ *
+ * And `google_search` is a tool the model chooses to call, not retrieval that
+ * happens to it. On topics it believes it knows it sometimes answers from memory
+ * and cites nothing — measured at roughly one topic in five, and it isn't fixed
+ * by instructing it to search harder: a prompt demanding "do not answer from
+ * memory" grounded *less* often than a plain one. Asking it to cite is what
+ * works, so that's the retry.
+ *
+ * If both attempts come back bare, the box is renamed. The prose is kept — it's
+ * still a lead worth following — but an ungrounded answer states dates and
+ * project names from memory, and one of those was wrong in testing. Under an
+ * "On the web" heading with no links, that reads as a web finding nobody
+ * bothered to cite. So it says what it actually is.
+ */
 async function webBox(topic, question, mode) {
-  const ask = (extra) => generate(
-    `Search the web and answer, for a reader studying small, community-scale and
-decentralised AI.
-
-Topic: ${topic}
-Question: ${question}
-${extra}
-45-70 words of plain prose. ${MODES[mode].webAsk} No headings, bullets or
-citation markers.`,
-    { search: true },
-  );
+  const ask = (extra) => generate(webBoxPrompt({ topic, question, mode, extra }), { search: true });
 
   let { text, links } = await ask('');
   if (!links.length) {
@@ -258,6 +169,18 @@ async function run(mode, text, search) {
   const [skip, take] = MODES[mode].band;
   const { topic, corpusQueries, webQuestion } = await plan(text, mode);
 
+  // The web half only needs the plan, not the retrieval, so it starts here
+  // rather than being bundled into a Promise.all after the search — otherwise
+  // the slowest call in the pipeline sits idle waiting for an embed it never
+  // uses.
+  const webPromise = webBox(topic, webQuestion, mode).catch((e) => ({
+    kind: 'web',
+    title: 'On the web',
+    summary: `The web search didn't come back (${e.message}).`,
+    links: [],
+    grounded: false,
+  }));
+
   const [neighbours, ...perQuery] = await Promise.all([
     // Over-fetch by the band's offset plus one, since the passage retrieves
     // itself and gets dropped below.
@@ -282,13 +205,7 @@ async function run(mode, text, search) {
 
   const [corpus, web] = await Promise.all([
     corpusBoxes(text, topic, near, related, mode),
-    webBox(topic, webQuestion, mode).catch((e) => ({
-      kind: 'web',
-      title: 'On the web',
-      summary: `The web search didn't come back (${e.message}).`,
-      links: [],
-      grounded: false,
-    })),
+    webPromise,
   ]);
 
   return { mode, topic, queries: corpusQueries, webQuestion, boxes: [...corpus, web] };

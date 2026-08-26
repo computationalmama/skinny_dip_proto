@@ -20,62 +20,10 @@
  */
 
 import { corpusPrompt, webPrompt } from '../ask-prompts.js';
+import { caller, dedupe, inlineLinks, nearest, truncate } from './retrieve.js';
 
 const TOP_K = 5;
 const MAX_LINKS = 4;
-const URL_RE = /https?:\/\/[^\s)"'\]]+/g;
-
-/**
- * Truncate to the shipped dimensionality and renormalise.
- *
- * Must match `truncate` in js/vectors.js exactly — the stored vectors were cut
- * the same way, and comparing a full-length query against truncated documents
- * gives cosines that mean nothing.
- */
-function truncate(vector, dims) {
-  const out = new Float32Array(dims);
-  let sum = 0;
-  for (let i = 0; i < dims; i++) {
-    out[i] = vector[i];
-    sum += vector[i] * vector[i];
-  }
-  const len = Math.sqrt(sum);
-  if (len) for (let i = 0; i < dims; i++) out[i] /= len;
-  return out;
-}
-
-/** Cosine against every chunk. Stored rows are already unit length. */
-function nearest(query, vectors, dims, count, k) {
-  const scored = [];
-  for (let i = 0; i < count; i++) {
-    let dot = 0;
-    const base = i * dims;
-    for (let d = 0; d < dims; d++) dot += query[d] * vectors[base + d];
-    scored.push([i, dot]);
-  }
-  return scored.sort((a, b) => b[1] - a[1]).slice(0, k);
-}
-
-function inlineLinks(passages) {
-  const seen = new Set();
-  const out = [];
-  for (const p of passages) {
-    for (const raw of p.text.match(URL_RE) || []) {
-      const url = raw.replace(/[.,;)]+$/, '');
-      if (seen.has(url)) continue;
-      seen.add(url);
-      try {
-        out.push({ title: new URL(url).hostname.replace(/^www\./, ''), url });
-      } catch { /* the regex is looser than URL() */ }
-    }
-  }
-  return out.slice(0, MAX_LINKS);
-}
-
-const dedupe = (links) => {
-  const seen = new Set();
-  return links.filter((l) => !seen.has(l.url) && seen.add(l.url));
-};
 
 /**
  * Answer `question`, asked while looking at `passage`.
@@ -85,31 +33,16 @@ const dedupe = (links) => {
  * canvas renders them identically.
  */
 export async function askQuestion({ passage, question, proxy, index }) {
-  if (!proxy) {
-    throw new Error('Live questions need the Gemini proxy, which this build has no URL for.');
-  }
-
-  const post = async (op, body) => {
-    const res = await fetch(`${proxy.replace(/\/+$/, '')}/${op}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || data.error) throw new Error(data.error || `Proxy HTTP ${res.status}`);
-    return data;
-  };
+  const api = caller(proxy);
 
   // Retrieve: embed the question through the proxy, then score locally.
-  const { embeddings } = await post('embed', { texts: [question] });
-  const { vectors, dims, chunks } = index;
-  const hits = nearest(truncate(embeddings[0], dims), vectors, dims, chunks.length, TOP_K)
-    .map(([i, score]) => ({ ...chunks[i], score }));
+  const [vector] = await api.embed([question]);
+  const hits = nearest(truncate(vector, index.dims), index, TOP_K);
 
   // Both calls at once — the web one is the slow half and shouldn't be waited on.
   const [corpus, web] = await Promise.all([
-    post('generate', { prompt: corpusPrompt({ passage, question, hits }) }),
-    post('generate', { prompt: webPrompt({ passage, question }), search: true })
+    api.generate(corpusPrompt({ passage, question, hits })),
+    api.generate(webPrompt({ passage, question }), { search: true })
       .catch((e) => ({ text: `The web search didn't come back (${e.message}).`, links: [] })),
   ]);
 
@@ -120,7 +53,7 @@ export async function askQuestion({ passage, question, proxy, index }) {
       kind: 'corpus',
       title: 'From the corpus',
       summary: corpus.text,
-      links: inlineLinks(hits),
+      links: inlineLinks(hits, MAX_LINKS),
       grounded: true,
     },
     {

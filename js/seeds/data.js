@@ -113,48 +113,19 @@ function zoomIndex() {
   return zoomPromise;
 }
 
-/**
- * The boxes behind the Zoom in / Zoom out pills: two from the corpus, one from
- * the web. `mode` is 'in' (deepen) or 'out' (situate).
- *
- * Live, this is a 25-50s round trip through Gemini. Static, it's a lookup into
- * the export — same boxes, computed at build time.
- */
-export async function zoom(text, mode = 'in') {
-  if (!STATIC) return getJSON(`/zoom?mode=${mode}&text=${encodeURIComponent(text)}`);
+// ── Live runtime ──────────────────────────────────────────────────────────────
 
-  const [index, data] = await Promise.all([searchIndex(), zoomIndex()]);
-  const i = index.byText.get(flatten(text));
-  if (i === undefined) {
-    throw new Error('That passage is not in the exported index — re-run the export.');
-  }
-
-  // `modes` is the two-mode shape; `boxes` is the older single-mode file, which
-  // held zoom-in only. Read both, so a deploy that lands before the next export
-  // still serves whatever zoom-in data is already published.
-  const rows = data.modes?.[mode] || (mode === 'in' ? data.boxes : null);
-  const boxes = rows?.[i];
-  if (!boxes?.length) {
-    // A partial export is a normal state — it runs for the better part of an
-    // hour per mode — so this is worded for whoever is reading the canvas, not
-    // for whoever runs the export.
-    throw new Error("This passage hasn't been zoomed yet. Try another one.");
-  }
-  return boxes;
-}
-
-// ── Ask box ───────────────────────────────────────────────────────────────────
-
-let askIndexPromise = null;
+let runtimePromise = null;
 
 /**
- * What the live ask box needs: the Worker URL, and the vectors to search.
+ * What a live move needs: the Worker URL, and the vectors to retrieve against.
  *
- * Both are fetched only when someone actually asks something — the vectors are
- * ~850 kB, and most visits never type a question.
+ * Fetched on first use rather than at boot — the vectors are ~850 kB, and a
+ * visit that only drags seeds around never needs them. Cached after that, so a
+ * second click pays nothing.
  */
-function askIndex() {
-  askIndexPromise ??= (async () => {
+function liveRuntime() {
+  runtimePromise ??= (async () => {
     const config = await getJSON('data/config.json');
     const dims = config.vectorDims || 768;
     const [index, vectors] = await Promise.all([
@@ -163,15 +134,65 @@ function askIndex() {
     ]);
     return { proxy: config.proxy, index: { vectors, dims, chunks: index.chunks } };
   })();
-  return askIndexPromise;
+  return runtimePromise;
 }
+
+// ── Zoom ──────────────────────────────────────────────────────────────────────
+
+/**
+ * The boxes behind the Zoom in / Zoom out pills: two from the corpus, one from
+ * the web. `mode` is 'in' (deepen) or 'out' (situate).
+ *
+ * Live in both builds — 30-50s and three Gemini calls a click. Locally that goes
+ * through the server, which holds the key and can query ChromaDB directly;
+ * hosted it goes through the Cloudflare Worker and retrieves against the shipped
+ * vectors in the browser. Same prompts either way (../zoom-prompts.js).
+ *
+ * `data/zoom.json` still holds a precomputed copy of every answer, and the
+ * deployed canvas read it until this became live. It's no longer on the read
+ * path — see `zoomPrecomputed` below, which is what to call to go back.
+ */
+export async function zoom(text, mode = 'in') {
+  if (!STATIC) {
+    return getJSON(`/zoom?mode=${mode}&text=${encodeURIComponent(text)}`);
+  }
+
+  const { zoomLive } = await import('./zoom-live.js');
+  const { proxy, index } = await liveRuntime();
+  return zoomLive({ text, mode, proxy, index });
+}
+
+/**
+ * The precomputed answer for a passage, from `data/zoom.json`.
+ *
+ * Not used by the canvas any more. Kept because the export still writes that
+ * file and it's an instant, free, quota-free answer for all 283 passages —
+ * swapping `zoom` back to this is a one-line change if the live path is ever
+ * too slow or too expensive.
+ */
+export async function zoomPrecomputed(text, mode = 'in') {
+  const [index, data] = await Promise.all([searchIndex(), getJSON('data/zoom.json')]);
+  const i = index.byText.get(flatten(text));
+  if (i === undefined) {
+    throw new Error('That passage is not in the exported index — re-run the export.');
+  }
+
+  const rows = data.modes?.[mode] || (mode === 'in' ? data.boxes : null);
+  const boxes = rows?.[i];
+  if (!boxes?.length) throw new Error("This passage hasn't been zoomed yet.");
+  return boxes;
+}
+
+// ── Ask box ───────────────────────────────────────────────────────────────────
 
 /**
  * Answer a typed question about `passage`.
  *
- * The only move that runs live in both builds. Locally it goes through the
- * server, which already holds the key; hosted it goes through the Cloudflare
- * Worker and does its retrieval in the browser. See seeds/ask.js.
+ * Locally this goes through the server, which already holds the key; hosted it
+ * goes through the Worker and retrieves in the browser. See seeds/ask.js.
+ *
+ * Unlike zoom there has never been a precomputed version of this — the question
+ * isn't known until someone types it.
  */
 export async function askQuestion(passage, question) {
   if (!STATIC) {
@@ -180,7 +201,7 @@ export async function askQuestion(passage, question) {
   }
 
   const { askQuestion: run } = await import('./ask.js');
-  const { proxy, index } = await askIndex();
+  const { proxy, index } = await liveRuntime();
   return run({ passage, question, proxy, index });
 }
 

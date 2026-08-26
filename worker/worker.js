@@ -36,13 +36,13 @@ const ALLOWED_ORIGINS = [
 const EMBED_MODEL = 'gemini-embedding-001';
 const GEN_MODEL = 'gemini-3.6-flash';
 
-const MAX_BODY = 16 * 1024;      // a question plus a few passages
+const MAX_BODY = 32 * 1024;      // a question, or a passage plus its retrieved neighbours
 const MAX_EMBED_TEXTS = 4;
-const MAX_PROMPT_CHARS = 12000;
+const MAX_PROMPT_CHARS = 24000;  // the corpus step sends up to 11 passages
 
 // Best-effort, per-isolate. See the note above.
 const WINDOW_MS = 60_000;
-const MAX_PER_WINDOW = 20;
+const MAX_PER_WINDOW = 40;       // a zoom click is 3-4 calls on its own
 const hits = new Map();
 
 function rateLimited(ip) {
@@ -122,16 +122,25 @@ async function embed(texts, key) {
 /**
  * Generate, optionally grounded in Google Search.
  *
- * No responseSchema is accepted here on purpose: setting one on a grounded call
- * makes the API drop groundingMetadata, so the answer arrives with no citations.
- * The page wants the links, so everything comes back as prose.
+ * A schema is accepted only when NOT grounding. Setting a responseSchema on a
+ * grounded call makes the API drop groundingMetadata, so the answer comes back
+ * with no citations — the model still searches, but the links vanish, and the
+ * links are the point of a web box. So the two combinations are kept apart here
+ * rather than trusted to every caller: search wins, and a schema sent alongside
+ * it is ignored.
  */
-async function generate(prompt, search, key) {
+async function generate(prompt, search, schema, key) {
   const body = {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: { temperature: 0.3 },
   };
-  if (search) body.tools = [{ google_search: {} }];
+
+  if (search) {
+    body.tools = [{ google_search: {} }];
+  } else if (schema) {
+    body.generationConfig.responseMimeType = 'application/json';
+    body.generationConfig.responseSchema = schema;
+  }
 
   const data = await callGemini(`${GEN_MODEL}:generateContent`, key, body);
   if (data.error) throw new Error(`Gemini ${data.error.code}: ${data.error.message}`);
@@ -165,7 +174,10 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { headers: cors(origin) });
     if (request.method !== 'POST') return json({ error: 'POST only' }, 405, origin);
 
-    if (origin && !ALLOWED_ORIGINS.includes(origin)) {
+    // A browser always sends Origin on a cross-origin POST, so requiring it
+    // costs real callers nothing and turns away casual curl. It is still not a
+    // boundary — the header is forgeable — see the note at the top.
+    if (!ALLOWED_ORIGINS.includes(origin)) {
       return json({ error: 'Origin not allowed' }, 403, origin);
     }
     if (!env.GOOGLE_API_KEY) {
@@ -199,7 +211,12 @@ export default {
         const prompt = String(payload.prompt || '');
         if (!prompt.trim()) return json({ error: 'prompt is required' }, 400, origin);
         if (prompt.length > MAX_PROMPT_CHARS) return json({ error: 'prompt too long' }, 400, origin);
-        return json(await generate(prompt, payload.search === true, env.GOOGLE_API_KEY), 200, origin);
+        const schema = payload.schema && typeof payload.schema === 'object' ? payload.schema : null;
+        return json(
+          await generate(prompt, payload.search === true, schema, env.GOOGLE_API_KEY),
+          200,
+          origin,
+        );
       }
 
       return json({ error: 'Unknown operation — use /embed or /generate' }, 404, origin);
