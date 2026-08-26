@@ -18,6 +18,19 @@ const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models';
 const REDIRECT_HOST = 'vertexaisearch.cloud.google.com';
 
 /**
+ * Transient failures worth waiting out rather than dropping a chunk over.
+ *
+ * A 283-chunk export makes ~900 of these calls, and 503 "high demand" came back
+ * for a couple of percent of them. Without a retry an export finishes full of
+ * holes and needs several passes to fill in.
+ */
+const RETRY_STATUS = new Set([429, 500, 502, 503, 504]);
+const RETRIES = 4;
+const BACKOFF_MS = 4000;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
  * One generateContent call.
  *
  * `schema` sets JSON mode and is returned parsed as `json`. `search` turns on
@@ -37,14 +50,7 @@ export async function generate(prompt, { schema, search = false, temperature = 0
     body.generationConfig.responseSchema = schema;
   }
 
-  const res = await fetch(`${ENDPOINT}/${config.gemini.model}:generateContent?key=${key}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-
-  const data = await res.json();
-  if (data.error) throw new Error(`Gemini ${data.error.code}: ${data.error.message}`);
+  const data = await postWithRetry(key, body);
 
   const candidate = data.candidates?.[0];
   if (!candidate) throw new Error('Gemini returned no candidates.');
@@ -66,6 +72,41 @@ export async function generate(prompt, { schema, search = false, temperature = 0
   }
 
   return { text, json, links: citations(candidate.groundingMetadata) };
+}
+
+/**
+ * POST the request, retrying transient failures with exponential backoff.
+ *
+ * Anything else — a bad key, a rejected schema, an unknown model — throws on the
+ * first attempt, since retrying it only wastes time.
+ */
+async function postWithRetry(key, body) {
+  let last;
+
+  for (let attempt = 0; attempt <= RETRIES; attempt++) {
+    if (attempt) await sleep(BACKOFF_MS * 2 ** (attempt - 1));
+
+    let data;
+    try {
+      const res = await fetch(`${ENDPOINT}/${config.gemini.model}:generateContent?key=${key}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      data = await res.json();
+    } catch (e) {
+      // Socket-level failure — no response to read, so treat it as transient.
+      last = new Error(`Gemini request failed: ${e.message}`);
+      continue;
+    }
+
+    if (!data.error) return data;
+
+    last = new Error(`Gemini ${data.error.code}: ${data.error.message}`);
+    if (!RETRY_STATUS.has(data.error.code)) throw last;
+  }
+
+  throw new Error(`${last.message} (after ${RETRIES} retries)`);
 }
 
 /** groundingChunks -> `{ title, url }[]`, deduped, source order kept. */

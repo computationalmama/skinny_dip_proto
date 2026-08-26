@@ -4,21 +4,32 @@
  *
  *   node deploy.js          # or: npm run deploy  (exports first)
  *
- * A detached temporary worktree rather than a branch checkout, so nothing
- * touches the working tree you're in — no stashing, no switching back. The
- * branch carries a single commit each time (`--orphan`), because its history is
- * build output and nobody needs to diff it.
+ * A temporary worktree rather than a branch checkout, so nothing touches the
+ * working tree you're in — no stashing, no switching back. The branch carries a
+ * single commit each time (`--orphan`), because its history is build output and
+ * nobody needs to diff it.
+ *
+ * The worktree lives in the system temp dir, deliberately NOT inside the repo.
+ * An earlier version put it at ROOT/.gh-pages-worktree, which meant this script
+ * ran `git worktree remove --force` and `fs.rmSync` on a path inside the working
+ * tree it was trying to protect. During that period the main worktree was found
+ * checked out to gh-pages with every tracked file — including the source corpus
+ * under docs/ — deleted from disk. The cause was never pinned to a specific
+ * command, so this doesn't claim to be the fix for it; it removes the sharp edge
+ * either way, and the check at the end fails loudly if the branch ever moves.
  */
 
 import { execFileSync } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const DIST = path.join(ROOT, 'dist');
-const WORK = path.join(ROOT, '.gh-pages-worktree');
+// Outside the repo on purpose — see the note at the top of this file.
+const WORK = path.join(os.tmpdir(), 'skinny-dip-gh-pages');
 const BRANCH = 'gh-pages';
 
 const git = (...args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim();
@@ -35,8 +46,17 @@ const cleanup = () => {
     try { git('worktree', 'remove', '--force', WORK); } catch {}
   }
   git('worktree', 'prune');
+
+  // Refuse to recursively delete anything inside the repo, whatever WORK says.
+  if (path.resolve(WORK).startsWith(path.resolve(ROOT) + path.sep)) {
+    throw new Error(`Refusing to remove ${WORK}: it is inside the repository.`);
+  }
   fs.rmSync(WORK, { recursive: true, force: true });
 };
+
+// What the working tree is on now, so we can prove we left it there.
+const startedOn = git('rev-parse', '--abbrev-ref', 'HEAD');
+const startedAt = git('rev-parse', 'HEAD');
 
 cleanup();
 
@@ -69,4 +89,16 @@ try {
   }
 } finally {
   cleanup();
+
+  // The whole point of the worktree is that your checkout doesn't move. If it
+  // did, say so here rather than leaving it to be discovered as missing files.
+  const endedOn = git('rev-parse', '--abbrev-ref', 'HEAD');
+  const endedAt = git('rev-parse', 'HEAD');
+
+  if (endedOn !== startedOn || endedAt !== startedAt) {
+    console.error(`\n! Your working tree moved: ${startedOn} @ ${startedAt.slice(0, 7)}` +
+                  ` -> ${endedOn} @ ${endedAt.slice(0, 7)}`);
+    console.error(`! Nothing is lost — get back with: git checkout ${startedOn}`);
+    process.exitCode = 1;
+  }
 }
