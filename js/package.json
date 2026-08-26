@@ -13,7 +13,8 @@
     "watch:seeds": "node seeds/build.mjs --watch",
     "build:seeds:static": "node seeds/build.mjs --static",
     "export:static": "npm run build:seeds:static && node --env-file-if-exists=.env export-static.js",
-    "deploy": "npm run export:static && node deploy.js"
+    "deploy": "npm run export:static && node deploy.js",
+    "export:zoom": "npm run build:seeds:static && node --env-file-if-exists=.env export-static.js --zoom"
   },
   "dependencies": {
     "@google/generative-ai": "^0.1.3",

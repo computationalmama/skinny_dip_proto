@@ -5,9 +5,16 @@
  * Writes ../dist/, which is everything GitHub Pages needs: the page, the
  * bundle, and the data the canvas used to ask the server for.
  *
- *   node export-static.js          # or: npm run export:static
+ *   node export-static.js                  # or: npm run export:static
+ *   node export-static.js --zoom           # also precompute the Zoom in pill
+ *   node export-static.js --zoom --limit 5 # ...for the first 5 chunks only
  *
  * Needs ChromaDB running and GOOGLE_API_KEY set, same as build.
+ *
+ * `--zoom` is separate because it is the expensive half: three Gemini calls per
+ * chunk, one of them a grounded web search. It resumes rather than restarting —
+ * chunks already in data/zoom.json are left alone — so an interrupted run costs
+ * only what it hadn't finished.
  *
  * ── Why the search can be precomputed ────────────────────────────────────────
  *
@@ -34,6 +41,7 @@ import { ChromaClient } from 'chromadb';
 import { config } from './config.js';
 import { createEmbeddingFunction, usesChromaEmbeddingFunction, generateEmbedding } from './embeddings.js';
 import { readProvocations } from './csv.js';
+import { zoomIn } from './zoom.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -45,6 +53,14 @@ const PROVOCATIONS_SRC = path.join(ROOT, 'provocations_with_sources.csv');
 // could serve. RESULT_COUNT in app.jsx is 2 today.
 const TOP_K = 8;
 const BATCH = 100;   // Google caps batchEmbedContents at 100 per call
+
+// Zoom is ~30s and 3 Gemini calls per chunk, so it runs concurrently. Kept low
+// deliberately: the grounded search is the rate-limited endpoint of the three.
+const ZOOM_CONCURRENCY = 5;
+
+const wantZoom = process.argv.includes('--zoom');
+const limitArg = process.argv.indexOf('--limit');
+const zoomLimit = limitArg > -1 ? Number(process.argv[limitArg + 1]) : Infinity;
 
 const flatten = (t) => t.replace(/\s+/g, ' ').trim();
 
@@ -147,13 +163,100 @@ function checkPassages(provocations, chunks) {
   return misses;
 }
 
-const write = (rel, body) => {
+const write = (rel, body, { quiet = false } = {}) => {
   const file = path.join(DIST, rel);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, body);
+  if (quiet) return;
   const kb = (Buffer.byteLength(body) / 1024).toFixed(1);
   console.log(`  dist/${rel}  ${kb} kB`);
 };
+
+// ── Zoom ──────────────────────────────────────────────────────────────────────
+
+/**
+ * Exact-cosine retrieval over the vectors already in memory.
+ *
+ * The zoom planner invents its own queries, so unlike the near/far tables these
+ * lookups can't be precomputed — each query is embedded here and scored against
+ * the whole collection. Exact rather than Chroma's ANN, for the same reason the
+ * far table is.
+ */
+function makeSearch(chunks) {
+  const embed = createEmbeddingFunction(config.google.taskType.querying);
+
+  return async (query, n) => {
+    const [raw] = await embed.generate([query]);
+    const v = normalize(raw);
+
+    return chunks
+      .map((c, i) => ({ i, score: dot(v, c.vector) }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, n)
+      .map(({ i }) => ({ text: chunks[i].text, file: chunks[i].file }));
+  };
+}
+
+/** Whatever a previous run finished, so this one only pays for the rest. */
+function loadExistingZoom(count) {
+  const file = path.join(DIST, 'data/zoom.json');
+  if (!fs.existsSync(file)) return new Array(count).fill(null);
+
+  try {
+    const prior = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (Array.isArray(prior?.boxes) && prior.boxes.length === count) return prior.boxes;
+    console.log('  (existing zoom.json does not match the collection — starting over)');
+  } catch {
+    console.log('  (existing zoom.json is unreadable — starting over)');
+  }
+  return new Array(count).fill(null);
+}
+
+/** Fixed pool of workers pulling from a shared queue. */
+async function runPool(tasks, size, worker) {
+  let next = 0;
+  const runners = Array.from({ length: Math.min(size, tasks.length) }, async () => {
+    while (next < tasks.length) await worker(tasks[next++]);
+  });
+  await Promise.all(runners);
+}
+
+async function precomputeZoom(chunks) {
+  const boxes = loadExistingZoom(chunks.length);
+  const search = makeSearch(chunks);
+
+  const todo = chunks
+    .map((_, i) => i)
+    .filter((i) => !boxes[i])
+    .slice(0, zoomLimit);
+
+  const done = boxes.filter(Boolean).length;
+  console.log(`  ${done} already done, ${todo.length} to go` +
+              (zoomLimit !== Infinity ? ` (--limit ${zoomLimit})` : ''));
+  if (!todo.length) return boxes;
+
+  // Written after every completion, so killing the run keeps the work.
+  const save = () => write('data/zoom.json', JSON.stringify({ boxes }), { quiet: true });
+
+  let finished = 0;
+  let failed = 0;
+  await runPool(todo, ZOOM_CONCURRENCY, async (i) => {
+    try {
+      const { boxes: result } = await zoomIn(chunks[i].text, search);
+      boxes[i] = result;
+    } catch (e) {
+      failed++;
+      console.log(`\n  ! chunk ${i}: ${e.message}`);
+    }
+    finished++;
+    if (boxes[i]) save();
+    process.stdout.write(`  zoomed ${finished} / ${todo.length}\r`);
+  });
+
+  console.log(`\n  ${todo.length - failed} succeeded, ${failed} failed` +
+              (failed ? ' — rerun with --zoom to retry just those' : ''));
+  return boxes;
+}
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
@@ -180,6 +283,19 @@ write('data/search.json', JSON.stringify({
   near,
   far,
 }));
+
+if (wantZoom) {
+  console.log('Precomputing Zoom in (3 Gemini calls per chunk)…');
+  const boxes = await precomputeZoom(chunks);
+  write('data/zoom.json', JSON.stringify({ boxes }));
+
+  const filled = boxes.filter(Boolean).length;
+  const ungrounded = boxes.filter(Boolean).filter((b) => b.some((x) => x.kind === 'web' && !x.grounded)).length;
+  console.log(`  ${filled} / ${chunks.length} chunks have zoom data` +
+              `, ${ungrounded} whose web box returned no citations`);
+} else if (fs.existsSync(path.join(DIST, 'data/zoom.json'))) {
+  console.log('Keeping the existing data/zoom.json (pass --zoom to refresh it).');
+}
 
 // Pages serves the site from a subdirectory, so the shell's asset paths are
 // relative. index.html is the same page — it makes the bare URL the share link.

@@ -44,6 +44,13 @@ export const config = {
     },
   },
 
+  // Gemini generation, used by the zoom pipeline (see gemini.js, zoom.js).
+  // Kept separate from `google` above, which is embeddings only.
+  gemini: {
+    // 2.5-flash is closed to new keys — the API itself points at 3.6-flash.
+    model: process.env.GEMINI_MODEL || 'gemini-3.6-flash',
+  },
+
   // LLM settings (for answer generation)
   llm: {
     model: process.env.LLM_MODEL || 'qwen2.5:7b',

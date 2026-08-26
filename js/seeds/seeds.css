@@ -266,14 +266,38 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* Zoom summaries are prose the model wrote, not a quoted passage — a touch
+   darker than the greyed-out chunk text, and given room for ~70 words. */
+.chunk-body--prose {
+  max-height: 260px;
+  color: #333;
+}
+
 .chunk-body::-webkit-scrollbar { width: 6px; }
 .chunk-body::-webkit-scrollbar-thumb { background: #d5d5d5; border-radius: 3px; }
+
+/* A zoom box reaching past what it can see — says so instead of looking sourced. */
+.chunk-note {
+  margin-top: 12px;
+  font-size: 12.5px;
+  font-style: italic;
+  line-height: 1.4;
+  color: #8a8a8a;
+}
 
 .chunk-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 18px;
+}
+
+/* A web box can carry four citations, so its chips are allowed to be narrower
+   than the domain they name and to truncate rather than widen the box. */
+.chunk-chips .chip--web {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chip {

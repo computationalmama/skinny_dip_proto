@@ -130,11 +130,16 @@ corpus do).
 this, Counterexample, Zoom in, Zoom out, Find evidence — plus an "ask your own
 question" box that fires on Enter. Clicking the box again closes them.
 
-**Find a neighbor** and **Counterexample** are wired up. Both search the vector
-DB live on every click — from opposite ends of the same ranking — and hang the
-results off the box as new boxes joined by edges carrying the action's pill.
-Nothing about them is pre-computed; `/neighbors` and `/counterexamples` share
-one implementation in `searchByCosine`.
+**Find a neighbor**, **Counterexample** and **Zoom in** are wired up. The first
+two search the vector DB from opposite ends of the same ranking and hang the
+results off the box as new boxes, joined by edges carrying the action's pill;
+`/neighbors` and `/counterexamples` share one implementation in `searchByCosine`.
+**Zoom in** is the agentic one — see [its section](#zoom-in) below.
+
+Running locally, all three go out live on every click; nothing comes from the
+pre-computed `sources` column. The hosted build reads precomputed answers
+instead, for the reasons in
+[Hosting on GitHub Pages](#hosting-on-github-pages).
 
 The collection was built without an `hnsw:space`, so Chroma indexed it with its
 default squared-L2, not cosine. The Gemini vectors are unit length, which makes
@@ -155,10 +160,61 @@ passage, not a rebuttal. In this corpus that skews toward the degenerate chunks
 degenerate (under 120 chars or a bare URL) against 1 of 12 for the nearest
 search.
 
-The other four pills and the ask box are **still inert**. Every one of them
+### Zoom in
+
+The agentic pill. One click, three steps, three boxes:
+
+1. **Plan.** Gemini reads the passage and decides what's worth looking up — the
+   topic it's really about, two or three retrieval queries for the corpus, and
+   one question to put to the open web. Nothing here is hardcoded; the queries
+   are the model's.
+2. **Corpus.** Those queries are embedded as `RETRIEVAL_QUERY` and run against
+   the vector DB, alongside the passage's own neighbours. Gemini writes up what
+   came back as two boxes — `In this corpus` (the passage and its immediate
+   surroundings) and `Related threads` (the other threads its queries turned up).
+   This step is told to use only the retrieved passages.
+3. **Web.** A grounded call answers the web question, and its citations become
+   the links on the third box, `On the web`.
+
+The pipeline lives in `zoom.js` and is shared: `/zoom` runs it live, and
+`export-static.js --zoom` runs it ahead of time for the hosted build. Generation
+goes through `gemini.js` — REST rather than the SDK, which is pinned at 0.1.3
+here and predates grounding entirely.
+
+Three things about the Gemini side are worth knowing before changing it.
+
+**A `responseSchema` on a grounded call silently drops the citations.** The model
+still searches and the answer is still grounded, but `groundingMetadata` doesn't
+come back at all. So the two corpus boxes use structured output and the web box
+deliberately doesn't.
+
+**Grounding is a tool the model chooses, not retrieval that happens to it.** On
+topics it thinks it knows, it sometimes answers from memory and cites nothing —
+about one topic in five. Instructing it harder makes this *worse*, not better: a
+prompt saying "you must search, do not answer from memory" grounded 0/1 where a
+plain "search the web and answer" grounded 5/5. Asking it to cite is what works,
+so that's the retry. If both attempts come back bare, the box is renamed
+`Unverified — model recall` and captioned, because an ungrounded answer still
+states specific dates and project names — one was wrong in testing — and under
+an "On the web" heading that reads as a web finding nobody cited.
+
+**Citation URLs expire.** Grounding returns `vertexaisearch.cloud.google.com`
+redirects that stop resolving after roughly a month, which would quietly rot
+every link in a static export. `resolveLinks` follows each one and stores the
+real destination, so the exported links are permanent.
+
+Costs and timing, measured: 25-50s and three Gemini calls per passage live. A
+full `--zoom` export is 283 passages, so budget ~45 minutes and ~900 generation
+calls of which ~340 are grounded searches. It resumes — passages already in
+`data/zoom.json` are skipped — so an interrupted run only costs what it hadn't
+reached, and `--limit N` does a handful at a time.
+
+The other three pills and the ask box are **still inert**. Every one of them
 calls `runAction(action, payload)` in `ChunkNode` — the single seam. Adding a
 move means a row in `ACTIONS` (id, label, colour) and a branch in `runAction`;
 `spawn()` and `actionEdge()` handle placing the results and labelling the edge.
+A box carrying a `links` array renders them as green source chips and gets the
+roomier prose styling, which is how the zoom boxes differ from a quoted passage.
 
 Because results can spawn results, removing a box takes its whole subtree —
 `withDescendants` walks `data.parentId`.
@@ -222,10 +278,19 @@ The canvas runs as a fully static site — no server, no ChromaDB, no API key on
 the host. One command builds it:
 
 ```bash
-npm run export:static   # -> ../dist/   (needs Chroma running + GOOGLE_API_KEY)
+npm run export:static   # -> ../dist/   (needs Chroma + GOOGLE_API_KEY)
+npm run export:zoom     # ...including Zoom in (slow — see below)
 npx serve dist          # check it locally first
 npm run deploy          # push dist/ to the gh-pages branch
 ```
+
+`export:zoom` is its own script rather than `export:static -- --zoom`, because
+npm appends passed-through args to the end of a `&&` chain, which lands them in
+the wrong place often enough not to rely on.
+
+`npm run deploy` runs the plain export and keeps whatever `data/zoom.json`
+already holds, so a routine redeploy doesn't re-run the expensive half. Use
+`export:zoom` when the corpus has changed.
 
 Then set Pages once, in the repo's **Settings → Pages**, to branch `gh-pages` /
 root. After that `npm run deploy` is the whole loop.
@@ -240,6 +305,7 @@ never touched and `main` stays free of build artifacts.
 | --- | --- |
 | `data/provocations.json` | `provocations_with_sources.csv`, parsed — the tray samples its ten in the browser |
 | `data/search.json` | The whole cosine ranking, ~140 kB |
+| `data/zoom.json` | Zoom in, precomputed per passage — only with `--zoom` |
 | `index.html`, `seeds.html` | The same shell, so the bare URL is the share link |
 | `static/seeds.{js,css}` | `npm run build:seeds:static` |
 
@@ -272,13 +338,21 @@ Because the export is keyed on flattened chunk text, it's checked for closure at
 build time: all 120 passages across the 40 provocations resolve, and so does
 every result any of them can spawn.
 
+**Zoom in rides the same argument.** Its pipeline is agentic — Gemini picks the
+queries — so unlike near/far it can't be reduced to a lookup table computed from
+vectors alone. But it's still keyed on the passage, and there are still only 283
+of those, so `--zoom` runs the real pipeline once per chunk at build time and the
+canvas reads the result. The boxes are identical to the live ones; what's lost is
+freshness, since the web half is a snapshot from export time rather than from the
+moment of the click.
+
 ### What can't come along
 
-- **The ask box and the four unwired pills.** Free text needs a live embedding,
-  and that needs a key the browser can't be given. They're inert on Pages
-  exactly as they're inert locally, so nothing regresses — but wiring them up
-  later means either asking each visitor for their own Gemini key or putting a
-  small proxy in front.
+- **The ask box and the three unwired pills.** Free text needs a live embedding
+  and a live model, and that needs a key the browser can't be given. They're
+  inert on Pages exactly as they're inert locally, so nothing regresses — but
+  wiring them up later means either asking each visitor for their own Gemini key
+  or putting a small proxy in front.
 - **The `/` chat page.** It generates with local Ollama. Not hostable.
 - **The `visualize-*.html` pages.** They pull `/embeddings` live. Exportable the
   same way if wanted (~3.5 MB of vectors, or ~870 kB truncated to 768 dims), but
@@ -291,10 +365,15 @@ Anything that changes the corpus or the provocations needs a fresh export —
 quota each time:
 
 ```bash
-node rag_web.js build      # corpus changed
-node provocations.js       # provocations.csv changed
+node rag_web.js build                  # corpus changed
+node provocations.js                   # provocations.csv changed
+npm run export:zoom                    # new chunks need zoom data too
 npm run deploy
 ```
+
+New chunks shift every index, so a corpus change invalidates `data/zoom.json`
+wholesale — the export notices the length mismatch and starts it over rather
+than mapping old answers onto new passages.
 
 ## Running order (summary)
 

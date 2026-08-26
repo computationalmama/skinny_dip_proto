@@ -25,7 +25,7 @@ import {
   useReactFlow,
 } from '@xyflow/react';
 
-import { isStatic, loadProvocations, searchPassage } from './data.js';
+import { isStatic, loadProvocations, searchPassage, zoomIn } from './data.js';
 
 import '@xyflow/react/dist/style.css';
 import './seeds.css';
@@ -41,6 +41,9 @@ const GAP_X = 190;     // horizontal run between a card and its chunks
 const RESULT_GAP_X = 250;
 const RESULT_GAP_Y = 420;
 const RESULT_COUNT = 2;
+// Zoom returns three boxes of prose rather than two of quoted passage, so they
+// need more room between them than a search result does.
+const ZOOM_GAP_Y = 330;
 // The fan cascades down and to the right. Kept deliberately tight: source boxes
 // are allowed to overlap each other mildly, and an open action panel overlaps
 // the box below it outright — the open one is lifted clear with z-index instead
@@ -80,6 +83,9 @@ const ACTIONS = [
 ];
 
 const actionById = Object.fromEntries(ACTIONS.map((a) => [a.id, a]));
+
+// Zoom in runs three model calls and a web search, so it says what it's doing.
+const BUSY_LABEL = { 'zoom-in': 'Zooming…' };
 
 /**
  * Actions answered by a cosine search over the vector DB.
@@ -252,7 +258,7 @@ function ChunkNode({ id, data }) {
   const remove = useRemoveSubtree(id);
 
   /** Drop `results` onto the canvas to the right, joined by labelled edges. */
-  const spawn = (action, results) => {
+  const spawn = (action, results, gapY = RESULT_GAP_Y) => {
     const self = getNode(id);
     if (!self) return;
 
@@ -264,7 +270,7 @@ function ChunkNode({ id, data }) {
       type: 'chunk',
       position: {
         x,
-        y: centreY + (i - (results.length - 1) / 2) * RESULT_GAP_Y - 150,
+        y: centreY + (i - (results.length - 1) / 2) * gapY - 150,
       },
       data: { ...result, parentId: id },
     }));
@@ -294,24 +300,52 @@ function ChunkNode({ id, data }) {
   };
 
   /**
+   * Zoom in — the agentic move.
+   *
+   * Gemini decides what to look up, the vector DB answers the corpus half, and a
+   * grounded web search answers the rest. Three boxes come back: two from the
+   * corpus, one from the web, each a short summary with whatever links it found.
+   * See zoom.js for the pipeline and data.js for which end it's read from.
+   */
+  const zoom = async () => {
+    const boxes = await zoomIn(data.text);
+
+    spawn('zoom-in', boxes.map((box) => ({
+      title: box.title,
+      text: box.summary,
+      links: box.links || [],
+      note: box.grounded === false
+        ? 'The web search returned no sources, so this is the model answering from '
+          + 'memory — treat the names and dates in it as unchecked.'
+        : null,
+      file: box.kind === 'corpus' ? data.file : null,
+      url: null,
+    })), ZOOM_GAP_Y);
+  };
+
+  /**
    * Every pill and the ask box lands here.
    *
-   * The two vector searches are wired up; the rest are still placeholders
-   * awaiting their own task. `action` is an ACTIONS id or 'ask', and `payload`
-   * carries the typed question for 'ask'.
+   * Three moves are wired up — the two cosine searches and Zoom in. The rest are
+   * still placeholders awaiting their own task. `action` is an ACTIONS id or
+   * 'ask', and `payload` carries the typed question for 'ask'.
    */
   const runAction = async (action, payload) => {
     if (busy) return;
     setError(null);
 
-    if (!VECTOR_SEARCHES[action]) {
+    const run = VECTOR_SEARCHES[action] ? () => search(action)
+              : action === 'zoom-in'    ? zoom
+              : null;
+
+    if (!run) {
       void payload;
       return;
     }
 
     setBusy(action);
     try {
-      await search(action);
+      await run();
     } catch (e) {
       setError(e.message);
     } finally {
@@ -337,12 +371,19 @@ function ChunkNode({ id, data }) {
         <Handle type="source" position={Position.Right} />
 
         <h3 className="chunk-title">{data.title}</h3>
-        <p className="chunk-body nowheel nodrag">{data.text}</p>
+        <p className={`chunk-body nowheel nodrag${data.links ? ' chunk-body--prose' : ''}`}>
+          {data.text}
+        </p>
+
+        {/* Zoom boxes say where they couldn't reach, rather than implying they did. */}
+        {data.note && <p className="chunk-note">{data.note}</p>}
 
         <div className="chunk-chips">
-          <span className="chip" title={data.file}>
-            <FileIcon /> Source
-          </span>
+          {data.file && (
+            <span className="chip" title={data.file}>
+              <FileIcon /> Source
+            </span>
+          )}
 
           {/* A few passages quote a link inline; only then is there a web source. */}
           {data.url && (
@@ -357,6 +398,21 @@ function ChunkNode({ id, data }) {
               <GlobeIcon /> Source
             </a>
           )}
+
+          {/* Zoom's own citations — the web box's sources, or a URL a passage quotes. */}
+          {(data.links || []).map((link) => (
+            <a
+              key={link.url}
+              className="chip chip--web nodrag"
+              href={link.url}
+              target="_blank"
+              rel="noreferrer"
+              title={link.url}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <GlobeIcon /> {link.title || 'Link'}
+            </a>
+          ))}
         </div>
       </div>
 
@@ -372,7 +428,7 @@ function ChunkNode({ id, data }) {
               onClick={() => runAction(action.id)}
               disabled={busy !== null}
             >
-              {busy === action.id ? 'Searching…' : action.label}
+              {busy === action.id ? BUSY_LABEL[action.id] || 'Searching…' : action.label}
             </button>
           ))}
 

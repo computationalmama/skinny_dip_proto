@@ -19,6 +19,7 @@ import {
 import { findDocuments, parseDocument } from './parsers.js';
 import { chunkText, getChunkingInfo } from './chunking.js';
 import { readProvocations } from './csv.js';
+import { zoomIn } from './zoom.js';
 
 const __dirname   = path.dirname(fileURLToPath(import.meta.url));
 const DOCS_PATH   = path.resolve(__dirname, '../docs');
@@ -399,6 +400,28 @@ function cosineSearchRoute(direction) {
 
 app.get('/neighbors', cosineSearchRoute('near'));
 app.get('/counterexamples', cosineSearchRoute('far'));
+
+/**
+ * Zoom in on a passage — the agentic pill.
+ *
+ * Runs the whole pipeline live: Gemini plans what to look up, the plan is
+ * searched against the vector DB, and a grounded call reaches the open web. It
+ * takes 25-40s, which is why the hosted build reads a precomputed copy instead
+ * (see export-static.js). Same zoom.js either way.
+ */
+app.get('/zoom', async (req, res) => {
+  const text = String(req.query.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'text is required' });
+
+  try {
+    const search = async (query, n) => searchByCosine(query, n, 'near');
+    const { boxes } = await zoomIn(text, search);
+    res.json(boxes);
+  } catch (e) {
+    console.error('Zoom failed:', e.message);
+    res.status(500).json({ error: `Zoom failed: ${e.message}` });
+  }
+});
 
 app.use('/static', express.static(path.join(__dirname, 'static'), { setHeaders: noCache }));
 app.get('/seeds.html', (_req, res) =>

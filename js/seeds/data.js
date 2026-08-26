@@ -13,8 +13,13 @@
  * back from the search as `flatten(chunk)` too. There are only 283 possible
  * queries, so all of them are precomputed and the answers are identical.
  *
- * The ask box and the four unwired pills are the exception — arbitrary text
- * needs a live embedding, and that needs a key the browser can't hold.
+ * Zoom in works the same way, for the same reason — the pipeline is agentic and
+ * slow (25-40s live), so the export runs it ahead of time per chunk and the
+ * hosted canvas reads the result.
+ *
+ * The ask box and the three still-unwired pills are the exception — arbitrary
+ * text needs a live embedding and a live model, and that needs a key the browser
+ * can't hold.
  */
 
 // esbuild replaces this with a literal, so the unused branch is stripped out.
@@ -91,6 +96,37 @@ export async function searchPassage(text, direction, n) {
     file: index.chunks[j].file,
     similarity,
   }));
+}
+
+// ── Zoom in ───────────────────────────────────────────────────────────────────
+
+let zoomPromise = null;
+
+function zoomIndex() {
+  zoomPromise ??= getJSON('data/zoom.json');
+  return zoomPromise;
+}
+
+/**
+ * The boxes behind the Zoom in pill: two read out of the corpus, one off the web.
+ *
+ * Live, this is a 25-40s round trip through Gemini. Static, it's a lookup into
+ * the export — same boxes, computed at build time.
+ */
+export async function zoomIn(text) {
+  if (!STATIC) return getJSON(`/zoom?text=${encodeURIComponent(text)}`);
+
+  const [index, data] = await Promise.all([searchIndex(), zoomIndex()]);
+  const i = index.byText.get(flatten(text));
+  if (i === undefined) {
+    throw new Error('That passage is not in the exported index — re-run the export.');
+  }
+
+  const boxes = data.boxes?.[i];
+  if (!boxes?.length) {
+    throw new Error('No zoom was exported for this passage — run the export with --zoom.');
+  }
+  return boxes;
 }
 
 export const isStatic = STATIC;
