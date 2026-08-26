@@ -163,6 +163,31 @@ function checkPassages(provocations, chunks) {
   return misses;
 }
 
+/**
+ * The bundle is built by a separate step, so it can silently be older than the
+ * data written beside it — which looks like the export didn't work rather than
+ * like the page is stale. Running through npm gets this right; running this file
+ * directly, as its own usage line suggests, does not.
+ */
+function checkBundle() {
+  const bundle = path.join(DIST, 'static/seeds.js');
+  const sources = ['seeds/app.jsx', 'seeds/data.js', 'seeds/seeds.css']
+    .map((f) => path.join(__dirname, f))
+    .filter((f) => fs.existsSync(f));
+
+  if (!fs.existsSync(bundle)) {
+    console.log('! No dist/static/seeds.js yet — run: npm run build:seeds:static');
+    return;
+  }
+
+  const built = fs.statSync(bundle).mtimeMs;
+  const stale = sources.filter((f) => fs.statSync(f).mtimeMs > built);
+  if (stale.length) {
+    console.log(`! dist/static/seeds.js is older than ${stale.map((f) => path.basename(f)).join(', ')}`);
+    console.log('  Run: npm run build:seeds:static   (npm run export:static does this for you)');
+  }
+}
+
 const write = (rel, body, { quiet = false } = {}) => {
   const file = path.join(DIST, rel);
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -259,6 +284,8 @@ async function precomputeZoom(chunks) {
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
+
+checkBundle();
 
 console.log('Reading collection "docs"…');
 const chunks = await readCollection();
