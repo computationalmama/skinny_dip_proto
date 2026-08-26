@@ -304,7 +304,7 @@ export function chunkSmart(text, fileType = 'text', chunkSize = 500, overlap = 5
  * Main chunking function - uses strategy from config
  *
  * @param {string} text - Text to chunk
- * @param {string} fileType - File type hint ('pdf', 'md', 'jsonl', etc.)
+ * @param {string} fileType - File type hint ('pdf', 'md', 'txt', 'jsonl', etc.)
  * @returns {string[]} Array of text chunks
  */
 export function chunkText(text, fileType = 'text') {

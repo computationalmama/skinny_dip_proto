@@ -25,7 +25,23 @@ export const config = {
   // Google Gemini settings
   google: {
     apiKey: process.env.GOOGLE_API_KEY || '',
-    model: 'gemini-embedding-1', // newer model, try this first
+    // Valid embedding models: 'gemini-embedding-001' (GA) or 'gemini-embedding-2'.
+    // Both return 3072-dim vectors. Note: switching models invalidates an existing
+    // collection — the vectors aren't comparable, so re-run build after changing this.
+    model: process.env.GOOGLE_EMBED_MODEL || 'gemini-embedding-001',
+
+    // Task types tell Gemini what the embedding is FOR, and it optimizes accordingly.
+    // These are real API enum values passed as the `taskType` request field - the API
+    // rejects anything outside its enum.
+    //
+    // Retrieval is asymmetric on purpose: documents are indexed as RETRIEVAL_DOCUMENT
+    // and questions are embedded as RETRIEVAL_QUERY, so the two are optimized to match
+    // each other rather than each being compared to its own kind.
+    taskType: {
+      indexing: 'RETRIEVAL_DOCUMENT',   // build: embedding the chunks we store
+      querying: 'RETRIEVAL_QUERY',      // ask: embedding the user's question
+      visualization: 'SEMANTIC_SIMILARITY', // clustering: content-to-content matching
+    },
   },
 
   // LLM settings (for answer generation)

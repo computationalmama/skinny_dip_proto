@@ -66,7 +66,33 @@ Embeddings transform text into vectors...
 
 ---
 
-### 3. JSON Lines (.jsonl)
+### 3. Plain Text Files (.txt)
+
+**How it works:** Reads the entire file as plain text (UTF-8) — the same read as markdown, minus the heading-aware chunking.
+
+**Usage:**
+```bash
+# Drop .txt files in docs/ folder
+cp transcript.txt docs/
+npm run build
+```
+
+**Features:**
+- No parsing step at all, so nothing can be lost in extraction
+- Chunked by paragraph/sentence structure rather than by headings
+
+**Best for:**
+- Transcripts and interview notes
+- Log or export dumps
+- Anything already flattened to prose
+
+**Note:** Because `.txt` has no heading structure, chunks are split with the
+`recursive` or `sentence` strategy (see `CHUNKING_STRATEGIES.md`). If your text
+does have headings, save it as `.md` to get heading-aligned chunks instead.
+
+---
+
+### 4. JSON Lines (.jsonl)
 
 **How it works:** Parses each line as a JSON object and extracts text from specific fields.
 
@@ -326,7 +352,7 @@ export async function parseDocument(filePath, options = {}) {
 3. **Update file discovery** (optional):
 
 ```javascript
-const documents = findDocuments(DOCS_PATH, ['.pdf', '.md', '.jsonl', '.yaml']);
+const documents = findDocuments(DOCS_PATH, ['.pdf', '.md', '.txt', '.jsonl', '.yaml']);
 ```
 
 4. **Install dependencies** if needed:
@@ -345,7 +371,7 @@ npm install js-yaml
 
 **Solutions:**
 - Check files are in `docs/` folder
-- Verify file extensions (.pdf, .md, .jsonl)
+- Verify file extensions (.pdf, .md, .txt, .jsonl)
 - Check file permissions
 
 ### "Skipping X - no text content"

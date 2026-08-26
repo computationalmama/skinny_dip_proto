@@ -13,8 +13,13 @@ import { config } from './config.js';
 
 /**
  * Create an embedding function based on the configured provider
+ *
+ * @param {string} [taskType] - Google task type (see config.google.taskType).
+ *   Defaults to the indexing task, so building the database needs no argument.
+ *   Pass config.google.taskType.querying when embedding a user's question.
+ *   Ignored by providers other than Google, which have no task-type concept.
  */
-export function createEmbeddingFunction() {
+export function createEmbeddingFunction(taskType = config.google.taskType.indexing) {
   const provider = config.EMBEDDING_PROVIDER.toLowerCase();
 
   switch (provider) {
@@ -40,6 +45,7 @@ export function createEmbeddingFunction() {
       return new GoogleGenerativeAiEmbeddingFunction({
         googleApiKey: config.google.apiKey,
         model: config.google.model,
+        taskType,
       });
 
     case 'ollama':
@@ -84,8 +90,10 @@ export function usesChromaEmbeddingFunction() {
 
 /**
  * Get embedding info for logging
+ *
+ * @param {string} [taskType] - Task type to mention, when relevant
  */
-export function getEmbeddingInfo() {
+export function getEmbeddingInfo(taskType = config.google.taskType.indexing) {
   const provider = config.EMBEDDING_PROVIDER.toLowerCase();
 
   switch (provider) {
@@ -93,31 +101,10 @@ export function getEmbeddingInfo() {
       return `OpenAI (${config.openai.model})`;
     case 'google':
     case 'gemini':
-      return `Google Gemini (${config.google.model})`;
+      return `Google Gemini (${config.google.model}, task: ${taskType})`;
     case 'ollama':
       return `Ollama (${config.ollama.model})`;
     default:
       return provider;
   }
-}
-
-/**
- * Format text with Google Gemini task type prefix
- * For gemini-embedding-2, format: "task: {task_type} | query: {content}"
- *
- * @param {string} text - The text to embed
- * @param {string} taskType - Task type: 'retrieval document', 'search query', 'semantic similarity', 'clustering', 'classification'
- * @returns {string} Formatted text with task prefix
- */
-export function formatGoogleTaskText(text, taskType) {
-  const provider = config.EMBEDDING_PROVIDER.toLowerCase();
-
-  // Only format for Google Gemini embedding-2
-  if ((provider === 'google' || provider === 'gemini') &&
-      config.google.model === 'gemini-embedding-2') {
-    return `task: ${taskType} | query: ${text}`;
-  }
-
-  // Return unmodified for other providers or models
-  return text;
 }

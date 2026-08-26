@@ -4,6 +4,7 @@
  * Handles parsing different file types into text:
  * - PDF files (.pdf)
  * - Markdown files (.md)
+ * - Plain text files (.txt)
  * - JSON Lines files (.jsonl)
  */
 
@@ -22,12 +23,25 @@ export async function parsePDF(filePath) {
 }
 
 /**
+ * Parse a plain text file
+ *
+ * No transformation needed - the file is already text. Markdown uses this too,
+ * since the heading structure is preserved for the chunker to split on.
+ *
+ * @param {string} filePath - Path to .txt file
+ * @returns {Promise<string>} File contents
+ */
+export async function parseText(filePath) {
+  return fs.readFileSync(filePath, 'utf-8');
+}
+
+/**
  * Parse a Markdown file into text
  * @param {string} filePath - Path to .md file
  * @returns {Promise<string>} File contents
  */
 export async function parseMarkdown(filePath) {
-  return fs.readFileSync(filePath, 'utf-8');
+  return parseText(filePath);
 }
 
 /**
@@ -91,10 +105,10 @@ export async function parseJSONL(filePath, options = {}) {
 /**
  * Find all supported document files in a directory (recursive)
  * @param {string} dir - Directory to search
- * @param {string[]} extensions - File extensions to include (default: ['.pdf', '.md', '.jsonl'])
+ * @param {string[]} extensions - File extensions to include (default: ['.pdf', '.md', '.txt', '.jsonl'])
  * @returns {Array<{path: string, type: string}>} Array of file info objects
  */
-export function findDocuments(dir, extensions = ['.pdf', '.md', '.jsonl']) {
+export function findDocuments(dir, extensions = ['.pdf', '.md', '.txt', '.jsonl']) {
   const results = [];
   if (!fs.existsSync(dir)) return results;
 
@@ -132,6 +146,8 @@ export async function parseDocument(filePath, options = {}) {
       return await parsePDF(filePath);
     case '.md':
       return await parseMarkdown(filePath);
+    case '.txt':
+      return await parseText(filePath);
     case '.jsonl':
       return await parseJSONL(filePath, options);
     default:

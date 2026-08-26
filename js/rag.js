@@ -25,7 +25,11 @@ const DOCS_PATH = path.resolve(__dirname, "../docs");
 
 const ollama = new Ollama();
 const chroma = new ChromaClient();
-const embeddingFunction = createEmbeddingFunction();
+
+// Two embedding functions, because retrieval is asymmetric: chunks are embedded
+// as documents, questions as queries. See config.google.taskType.
+const indexEmbeddingFunction = createEmbeddingFunction(config.google.taskType.indexing);
+const queryEmbeddingFunction = createEmbeddingFunction(config.google.taskType.querying);
 
 // ── Commands ──────────────────────────────────────────────────────────────────
 
@@ -33,7 +37,7 @@ async function build() {
   const documents = findDocuments(DOCS_PATH);
   if (!documents.length) {
     console.log(`No documents found in ${DOCS_PATH}`);
-    console.log(`Supported formats: .pdf, .md, .jsonl`);
+    console.log(`Supported formats: .pdf, .md, .txt, .jsonl`);
     return;
   }
 
@@ -96,7 +100,7 @@ async function build() {
   // Create collection with embedding function if using OpenAI/Google
   const collectionConfig = { name: "docs" };
   if (usesChromaEmbeddingFunction()) {
-    collectionConfig.embeddingFunction = embeddingFunction;
+    collectionConfig.embeddingFunction = indexEmbeddingFunction;
   }
   const col = await chroma.createCollection(collectionConfig);
 
@@ -137,10 +141,12 @@ async function build() {
 async function ask(question, showSources = false) {
   let col;
   try {
-    // Get collection with embedding function if using OpenAI/Google
+    // Get collection with embedding function if using OpenAI/Google.
+    // The query task type is what matters here - the stored vectors keep
+    // whatever task type they were built with.
     const collectionConfig = { name: "docs" };
     if (usesChromaEmbeddingFunction()) {
-      collectionConfig.embeddingFunction = embeddingFunction;
+      collectionConfig.embeddingFunction = queryEmbeddingFunction;
     }
     col = await chroma.getCollection(collectionConfig);
   } catch {
