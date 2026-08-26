@@ -7,7 +7,6 @@
 import express from 'express';
 import { ChromaClient } from 'chromadb';
 import { Ollama } from 'ollama';
-import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { config } from './config.js';
@@ -17,107 +16,117 @@ import {
   usesChromaEmbeddingFunction,
   getEmbeddingInfo,
 } from './embeddings.js';
+import { findDocuments, parseDocument } from './parsers.js';
+import { chunkText, getChunkingInfo } from './chunking.js';
+import { readProvocations } from './csv.js';
 
 const __dirname   = path.dirname(fileURLToPath(import.meta.url));
 const DOCS_PATH   = path.resolve(__dirname, '../docs');
-const CHUNK_SIZE  = config.rag.chunkSize;
-const OVERLAP     = config.rag.overlap;
-const PORT        = 6601;
+const PROVOCATIONS      = path.resolve(__dirname, '../provocations.csv');
+const PROVOCATIONS_SRC  = path.resolve(__dirname, '../provocations_with_sources.csv');
+const PORT        = Number(process.env.PORT) || 6601;
 
 const ollama = new Ollama();
 const chroma = new ChromaClient();
-const embeddingFunction = createEmbeddingFunction();
+
+// Two embedding functions, because retrieval is asymmetric: chunks are embedded
+// as documents, questions as queries. See config.google.taskType.
+const indexEmbeddingFunction = createEmbeddingFunction(config.google.taskType.indexing);
+const queryEmbeddingFunction = createEmbeddingFunction(config.google.taskType.querying);
+
 const app    = express();
 app.use(express.json());
-
-// ── Text helpers ──────────────────────────────────────────────────────────────
-
-function chunkText(text) {
-  const chunks = [];
-  let start = 0;
-  while (start < text.length) {
-    const end = Math.min(start + CHUNK_SIZE, text.length);
-    const chunk = text.slice(start, end).trim();
-    if (chunk) chunks.push(chunk);
-    if (end === text.length) break;
-    start += CHUNK_SIZE - OVERLAP;
-  }
-  return chunks;
-}
-
-function findPDFs(dir) {
-  const results = [];
-  if (!fs.existsSync(dir)) return results;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) results.push(...findPDFs(full));
-    else if (entry.name.toLowerCase().endsWith('.pdf')) results.push(full);
-  }
-  return results;
-}
 
 // ── RAG logic ─────────────────────────────────────────────────────────────────
 
 async function build() {
-  const pdfFiles = findPDFs(DOCS_PATH);
-  if (!pdfFiles.length) {
-    console.log(`No PDFs found in ${DOCS_PATH}`);
+  const documents = findDocuments(DOCS_PATH);
+  if (!documents.length) {
+    console.log(`No documents found in ${DOCS_PATH}`);
+    console.log(`Supported formats: .pdf, .md, .txt, .jsonl`);
     return false;
   }
-  console.log(`Found ${pdfFiles.length} PDF(s). Parsing...`);
-  console.log(`Using embeddings: ${getEmbeddingInfo()}`);
 
-  const { default: pdfParse } = await import('pdf-parse/lib/pdf-parse.js');
+  // Count by type
+  const typeCounts = {};
+  documents.forEach(doc => {
+    typeCounts[doc.type] = (typeCounts[doc.type] || 0) + 1;
+  });
+
+  console.log(`Found ${documents.length} document(s):`);
+  Object.entries(typeCounts).forEach(([type, count]) => {
+    console.log(`  - ${count} ${type.toUpperCase()} file(s)`);
+  });
+  console.log(`Using embeddings: ${getEmbeddingInfo()}`);
+  console.log(`Chunking strategy: ${getChunkingInfo()}`);
+  console.log('Parsing...');
 
   const chunks = [];
-  for (const file of pdfFiles) {
-    const data = await pdfParse(fs.readFileSync(file));
-    for (const chunk of chunkText(data.text)) {
-      chunks.push({ text: chunk, source: path.basename(file) });
+  for (const doc of documents) {
+    try {
+      const text = await parseDocument(doc.path);
+      if (!text || !text.trim()) {
+        console.warn(`  Skipping ${doc.name} - no text content`);
+        continue;
+      }
+
+      // Use smart chunking with file type awareness
+      const docChunks = chunkText(text, doc.type);
+      for (const chunk of docChunks) {
+        chunks.push({ text: chunk, source: doc.name });
+      }
+      console.log(`  ✓ ${doc.name} (${doc.type}) - ${docChunks.length} chunks`);
+    } catch (error) {
+      console.error(`  ✗ ${doc.name} - ${error.message}`);
     }
   }
+
+  if (!chunks.length) {
+    console.log('No text content extracted from documents.');
+    return false;
+  }
+
   console.log(`Split into ${chunks.length} chunks. Embedding...`);
 
   const ids        = [];
-  const documents  = [];
+  const chunkTexts = [];
   const metadatas  = [];
 
   for (let i = 0; i < chunks.length; i++) {
     const { text, source } = chunks[i];
     ids.push(`chunk_${i}`);
-    documents.push(text);
+    chunkTexts.push(text);
     metadatas.push({ source });
   }
 
   try { await chroma.deleteCollection({ name: 'docs' }); } catch {}
 
-  // Create collection with embedding function if using OpenAI/
-  
+  // Create collection with embedding function if using OpenAI/Google
   const collectionConfig = { name: 'docs' };
   if (usesChromaEmbeddingFunction()) {
-    collectionConfig.embeddingFunction = embeddingFunction;
+    collectionConfig.embeddingFunction = indexEmbeddingFunction;
   }
   const col = await chroma.createCollection(collectionConfig);
 
   // For Ollama, we need to generate embeddings manually
   if (!usesChromaEmbeddingFunction()) {
     const embeddings = [];
-    for (let i = 0; i < documents.length; i++) {
-      const embedding = await generateEmbedding(documents[i]);
+    for (let i = 0; i < chunkTexts.length; i++) {
+      const embedding = await generateEmbedding(chunkTexts[i]);
       embeddings.push(embedding);
-      if ((i + 1) % 10 === 0) console.log(`  ${i + 1} / ${documents.length}`);
+      if ((i + 1) % 10 === 0) console.log(`  ${i + 1} / ${chunkTexts.length}`);
     }
-    await col.add({ ids, documents, embeddings, metadatas });
+    await col.add({ ids, documents: chunkTexts, embeddings, metadatas });
   } else {
     // For OpenAI/Google, ChromaDB handles embeddings but we need to batch
     // Google has a limit of 100 requests per batch
     const batchSize = config.EMBEDDING_PROVIDER.toLowerCase() === 'google' ||
                       config.EMBEDDING_PROVIDER.toLowerCase() === 'gemini' ? 100 : 1000;
 
-    for (let i = 0; i < documents.length; i += batchSize) {
-      const end = Math.min(i + batchSize, documents.length);
+    for (let i = 0; i < chunkTexts.length; i += batchSize) {
+      const end = Math.min(i + batchSize, chunkTexts.length);
       const batchIds = ids.slice(i, end);
-      const batchDocs = documents.slice(i, end);
+      const batchDocs = chunkTexts.slice(i, end);
       const batchMetas = metadatas.slice(i, end);
 
       await col.add({
@@ -126,7 +135,7 @@ async function build() {
         metadatas: batchMetas
       });
 
-      console.log(`  ${end} / ${documents.length}`);
+      console.log(`  ${end} / ${chunkTexts.length}`);
     }
   }
 
@@ -137,10 +146,12 @@ async function build() {
 async function query(question) {
   let col;
   try {
-    // Get collection with embedding function if using OpenAI/Google
+    // Get collection with embedding function if using OpenAI/Google.
+    // The query task type is what matters here - the stored vectors keep
+    // whatever task type they were built with.
     const collectionConfig = { name: 'docs' };
     if (usesChromaEmbeddingFunction()) {
-      collectionConfig.embeddingFunction = embeddingFunction;
+      collectionConfig.embeddingFunction = queryEmbeddingFunction;
     }
     col = await chroma.getCollection(collectionConfig);
   } catch {
@@ -201,14 +212,20 @@ app.post('/ask', async (req, res) => {
   }
 });
 
+// Fetch the stored collection. Uses the index embedding function so the returned
+// vectors are exactly what build() wrote - no re-embedding happens here.
+async function getDocsCollection() {
+  const collectionConfig = { name: 'docs' };
+  if (usesChromaEmbeddingFunction()) {
+    collectionConfig.embeddingFunction = indexEmbeddingFunction;
+  }
+  return await chroma.getCollection(collectionConfig);
+}
+
 app.get('/embeddings', async (_req, res) => {
   let col;
   try {
-    const collectionConfig = { name: 'docs' };
-    if (usesChromaEmbeddingFunction()) {
-      collectionConfig.embeddingFunction = embeddingFunction;
-    }
-    col = await chroma.getCollection(collectionConfig);
+    col = await getDocsCollection();
   } catch {
     return res.status(404).json({ error: 'Collection "docs" not found. Run: node rag_web.js build' });
   }
@@ -224,8 +241,96 @@ app.get('/embeddings', async (_req, res) => {
   res.json({ collection: 'docs', chunks });
 });
 
+/**
+ * Re-embed every stored chunk with the SEMANTIC_SIMILARITY task type.
+ *
+ * The database is built for retrieval (query-to-document matching), which is the
+ * wrong optimization for clustering. This regenerates vectors tuned for
+ * content-to-content similarity instead, so the pools group by actual topic.
+ *
+ * This calls the embedding API for every chunk, so it is slow and costs quota.
+ * It is a visualization aid - never use it on the query path.
+ */
+app.get('/embeddings-semantic', async (_req, res) => {
+  if (!usesChromaEmbeddingFunction()) {
+    return res.status(400).json({
+      error: 'Semantic re-embedding requires the Google or OpenAI provider. ' +
+             `Current provider: ${config.EMBEDDING_PROVIDER}`,
+    });
+  }
+
+  let col;
+  try {
+    col = await getDocsCollection();
+  } catch {
+    return res.status(404).json({ error: 'Collection "docs" not found. Run: node rag_web.js build' });
+  }
+
+  try {
+    const data = await col.get({ include: ['documents', 'metadatas'] });
+    if (!data.ids.length) {
+      return res.status(404).json({ error: 'Collection "docs" is empty. Run: node rag_web.js build' });
+    }
+
+    const taskType = config.google.taskType.visualization;
+    const semanticFunction = createEmbeddingFunction(taskType);
+    console.log(`Re-embedding ${data.ids.length} chunks as ${taskType}...`);
+
+    // Google caps batchEmbedContents at 100 requests per call
+    const batchSize = 100;
+    const embeddings = [];
+    for (let i = 0; i < data.documents.length; i += batchSize) {
+      const batch = data.documents.slice(i, i + batchSize);
+      embeddings.push(...await semanticFunction.generate(batch));
+      console.log(`  ${Math.min(i + batchSize, data.documents.length)} / ${data.documents.length}`);
+    }
+
+    const chunks = data.ids.map((id, i) => ({
+      id,
+      text: data.documents[i],
+      source: data.metadatas[i]?.source || 'Unknown',
+      embedding: embeddings[i],
+    }));
+
+    res.json({ collection: `docs (${taskType})`, taskType, chunks });
+  } catch (e) {
+    console.error('Semantic re-embed failed:', e.message);
+    res.status(500).json({ error: `Re-embedding failed: ${e.message}` });
+  }
+});
+
+// Provocations for the seeds canvas. `?n=10` returns a random sample.
+app.get('/provocations', (req, res) => {
+  try {
+    const all = readProvocations(PROVOCATIONS_SRC, PROVOCATIONS);
+    const n = Number(req.query.n);
+
+    if (!n || n >= all.length) return res.json(all);
+
+    // Fisher-Yates on a copy, so the sample is uniform and the source order stays put.
+    const pool = [...all];
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    res.json(pool.slice(0, n));
+  } catch (e) {
+    console.error('Provocations read failed:', e.message);
+    res.status(500).json({ error: `Could not read provocations: ${e.message}` });
+  }
+});
+
+// `no-cache` means "store it, but revalidate every time". Express's default of
+// `max-age=0` lets Chrome serve the bundle from its in-memory cache without
+// asking, so an open tab keeps running a stale build after `npm run build:seeds`.
+const noCache = (res) => res.setHeader('Cache-Control', 'no-cache');
+
+app.use('/static', express.static(path.join(__dirname, 'static'), { setHeaders: noCache }));
+app.get('/seeds.html', (_req, res) =>
+  res.sendFile(path.join(__dirname, 'seeds.html'), { headers: { 'Cache-Control': 'no-cache' } }));
 app.get('/visualize.html', (_req, res) => res.sendFile(path.join(__dirname, 'visualize.html')));
 app.get('/visualize-d3.html', (_req, res) => res.sendFile(path.join(__dirname, 'visualize-d3.html')));
+app.get('/visualize-d3-semantic.html', (_req, res) => res.sendFile(path.join(__dirname, 'visualize-d3-semantic.html')));
 
 app.get('/', (_req, res) => res.send(HTML));
 
@@ -517,12 +622,14 @@ if (cmd === 'build') {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`\nChat:        http://localhost:${PORT}`);
+    console.log(`Seeds:       http://localhost:${PORT}/seeds.html`);
     console.log(`Pools (p5):  http://localhost:${PORT}/visualize.html`);
     console.log(`Pools (d3):  http://localhost:${PORT}/visualize-d3.html`);
+    console.log(`Pools (sem): http://localhost:${PORT}/visualize-d3-semantic.html`);
     console.log('Ctrl+C to stop\n');
   });
 } else {
   console.log('Commands:');
-  console.log('  node rag_web.js build  — index PDFs');
+  console.log('  node rag_web.js build  — index documents (.pdf, .md, .txt, .jsonl)');
   console.log('  node rag_web.js serve  — start web UI');
 }

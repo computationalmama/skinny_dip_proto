@@ -1,0 +1,300 @@
+/* Seeds canvas — tray, cards, and the React Flow chrome. */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --ink: #000;
+  --line: #e6e6e6;
+  --muted: #8b8b8b;
+}
+
+html, body, #root { height: 100%; }
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
+  background: #fff;
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.flow { width: 100%; height: 100%; }
+
+/* ── Seeds tray ─────────────────────────────────────────────────────────────── */
+
+.tray {
+  display: flex;
+  flex-direction: column;
+  width: 300px;
+  max-height: calc(100vh - 32px);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, .07);
+  overflow: hidden;
+}
+
+.tray-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  padding: 13px 14px 13px 17px;
+  border-bottom: 1px solid #ededed;
+}
+
+.tray--collapsed .tray-head { border-bottom: none; }
+
+.tray-title { font-size: 15px; font-weight: 500; letter-spacing: -.01em; }
+
+.tray-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  font-size: 15px;
+  line-height: 1;
+  color: #444;
+  background: #fff;
+  border: 1px solid #dcdcdc;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.tray-toggle:hover { background: #f6f6f6; }
+
+.tray-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 13px;
+  columns: 2;
+  column-gap: 10px;
+}
+
+/* ── Cards ──────────────────────────────────────────────────────────────────── */
+
+.seed {
+  display: block;
+  break-inside: avoid;
+  margin-bottom: 10px;
+  padding: 10px 11px 11px;
+  font-size: 13px;
+  line-height: 1.42;
+  letter-spacing: -.005em;
+  color: #fff;
+  background: var(--ink);
+  border-radius: 3px;
+  cursor: grab;
+  user-select: none;
+}
+
+.seed:active { cursor: grabbing; }
+.seed--dragging { opacity: .4; }
+
+.tray-empty {
+  column-span: all;
+  padding: 22px 4px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* ── Dropped card ───────────────────────────────────────────────────────────── */
+
+/* Wrapper exists so the hover controls can straddle the card's edges. */
+.card-wrap { position: relative; width: 305px; }
+
+.card {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  min-height: 345px;
+  padding: 28px;
+  color: #fff;
+  background: var(--ink);
+  border-radius: 3px;
+}
+
+/* One size on every card. Long text grows the card instead of shrinking to
+   fit, so a canvas full of cards reads as a single weight. */
+.card-text {
+  font-size: 20px;
+  line-height: 1.18;
+  letter-spacing: -.02em;
+}
+
+/* Capped and scrollable: the passages run to ~1,200 characters, and without a
+   ceiling the card grows tall enough to push its own Collapse button offscreen. */
+.card-sources {
+  max-height: 260px;
+  margin-top: 20px;
+  padding-top: 16px;
+  overflow-y: auto;
+  border-top: 1px solid rgba(255, 255, 255, .22);
+  font-size: 12px;
+  line-height: 1.55;
+  letter-spacing: 0;
+  color: rgba(255, 255, 255, .62);
+  cursor: auto;
+}
+
+.card-sources::-webkit-scrollbar { width: 6px; }
+.card-sources::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, .25);
+  border-radius: 3px;
+}
+
+/* ── Hover controls ─────────────────────────────────────────────────────────── */
+
+.card-close,
+.card-expand {
+  position: absolute;
+  opacity: 0;
+  transition: opacity .12s ease;
+  cursor: pointer;
+}
+
+.card-wrap:hover .card-close,
+.card-wrap:hover .card-expand,
+.card-close:focus-visible,
+.card-expand:focus-visible { opacity: 1; }
+
+/* Centred on the top-right corner, half outside the card. */
+.card-close {
+  top: 0;
+  right: 0;
+  transform: translate(50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  color: #111;
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 50%;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .12);
+}
+
+.card-close:hover { background: #f2f2f2; }
+
+/* Pill hanging off the bottom edge, centred. */
+.card-expand {
+  bottom: 0;
+  left: 50%;
+  transform: translate(-50%, 50%);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 18px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+  color: #fff;
+  background: #111;
+  border: none;
+  border-radius: 999px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .22);
+}
+
+.card-expand:hover { background: #292929; }
+
+.chev { transition: transform .15s ease; }
+.chev--up { transform: rotate(180deg); }
+
+/* ── React Flow chrome ──────────────────────────────────────────────────────── */
+
+.react-flow__node { cursor: grab; }
+.react-flow__node:active { cursor: grabbing; }
+.react-flow__node.selected .card { outline: 2px solid #6a5cff; outline-offset: 3px; }
+
+.react-flow__controls {
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .08);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.react-flow__controls-button {
+  width: 30px;
+  height: 30px;
+  background: #fff;
+  border-bottom: 1px solid #ececec;
+}
+
+.react-flow__controls-button:hover { background: #f6f6f6; }
+.react-flow__controls-button svg { fill: #333; }
+
+.status {
+  padding: 22px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* ── Chunk card ─────────────────────────────────────────────────────────────── */
+
+/* One retrieved passage, fanned out when a card is clicked. */
+.chunk {
+  width: 360px;
+  padding: 24px 26px;
+  background: #fff;
+  border: 2px solid var(--ink);
+  cursor: default;
+}
+
+.chunk-title {
+  margin-bottom: 14px;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.28;
+  letter-spacing: -.015em;
+}
+
+/* Passages run ~500 characters. Capped so the three fanned cards keep a
+   predictable height and don't collide — GAP_Y in app.jsx assumes this. */
+.chunk-body {
+  max-height: 180px;
+  overflow-y: auto;
+  font-size: 15px;
+  line-height: 1.5;
+  color: #4a4a4a;
+}
+
+.chunk-body::-webkit-scrollbar { width: 6px; }
+.chunk-body::-webkit-scrollbar-thumb { background: #d5d5d5; border-radius: 3px; }
+
+.chunk-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 11px;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+  color: #111;
+  background: #ececec;
+  border-radius: 3px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+/* Only shown when the passage quotes a link. */
+.chip--web { background: #b8f2d8; }
+.chip--web:hover { background: #a2ecca; }
+
+/* Edge anchors only — the arrows should look like they leave the card itself. */
+.react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+  border: none;
+  min-width: 0;
+  min-height: 0;
+}

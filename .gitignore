@@ -17,3 +17,6 @@ js/node_modules/
 js/package-lock.json
 js/rag_database
 js/.env
+
+# Bundled by `npm run build:seeds`
+js/static/
