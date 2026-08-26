@@ -1,0 +1,6 @@
+name = "skinny-dip-gemini"
+main = "worker.js"
+compatibility_date = "2026-08-01"
+
+# GOOGLE_API_KEY is a secret, never put it here:
+#   npx wrangler secret put GOOGLE_API_KEY

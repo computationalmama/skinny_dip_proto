@@ -20,6 +20,8 @@ import { findDocuments, parseDocument } from './parsers.js';
 import { chunkText, getChunkingInfo } from './chunking.js';
 import { readProvocations } from './csv.js';
 import { zoomIn, zoomOut } from './zoom.js';
+import { generate, resolveLinks } from './gemini.js';
+import { corpusPrompt, webPrompt } from './ask-prompts.js';
 
 const __dirname   = path.dirname(fileURLToPath(import.meta.url));
 const DOCS_PATH   = path.resolve(__dirname, '../docs');
@@ -423,6 +425,44 @@ app.get('/zoom', async (req, res) => {
   } catch (e) {
     console.error(`Zoom (${mode}) failed:`, e.message);
     res.status(500).json({ error: `Zoom failed: ${e.message}` });
+  }
+});
+
+/**
+ * The ask box, run locally.
+ *
+ * Same two prompts the hosted build sends through the Cloudflare Worker (see
+ * ask-prompts.js), except retrieval uses Chroma directly instead of shipping
+ * vectors to the browser, and the key is already here.
+ */
+app.get('/ask-passage', async (req, res) => {
+  const text = String(req.query.text || '').trim();
+  const question = String(req.query.q || '').trim();
+  if (!text || !question) return res.status(400).json({ error: 'text and q are required' });
+
+  try {
+    const hits = await searchByCosine(question, 5, 'near');
+
+    const [corpus, web] = await Promise.all([
+      generate(corpusPrompt({ passage: text, question, hits })),
+      generate(webPrompt({ passage: text, question }), { search: true })
+        .catch((e) => ({ text: `The web search didn't come back (${e.message}).`, links: [] })),
+    ]);
+
+    const links = await resolveLinks(web.links || []);
+    res.json([
+      { kind: 'corpus', title: 'From the corpus', summary: corpus.text, links: [], grounded: true },
+      {
+        kind: 'web',
+        title: links.length ? 'On the web' : 'Unverified — model recall',
+        summary: web.text,
+        links: links.slice(0, 4),
+        grounded: links.length > 0,
+      },
+    ]);
+  } catch (e) {
+    console.error('Ask failed:', e.message);
+    res.status(500).json({ error: `Ask failed: ${e.message}` });
   }
 });
 

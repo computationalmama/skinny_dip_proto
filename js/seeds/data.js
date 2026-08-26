@@ -28,6 +28,12 @@ const STATIC = process.env.SEEDS_STATIC === 'true';
 /** The same whitespace collapse the server and provocations.js both apply. */
 const flatten = (t) => t.replace(/\s+/g, ' ').trim();
 
+async function getBinary(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  return new Float32Array(await res.arrayBuffer());
+}
+
 async function getJSON(url) {
   const res = await fetch(url);
   if (!res.ok) {
@@ -135,6 +141,47 @@ export async function zoom(text, mode = 'in') {
     throw new Error("This passage hasn't been zoomed yet. Try another one.");
   }
   return boxes;
+}
+
+// ── Ask box ───────────────────────────────────────────────────────────────────
+
+let askIndexPromise = null;
+
+/**
+ * What the live ask box needs: the Worker URL, and the vectors to search.
+ *
+ * Both are fetched only when someone actually asks something — the vectors are
+ * ~850 kB, and most visits never type a question.
+ */
+function askIndex() {
+  askIndexPromise ??= (async () => {
+    const config = await getJSON('data/config.json');
+    const dims = config.vectorDims || 768;
+    const [index, vectors] = await Promise.all([
+      searchIndex(),
+      getBinary(`data/vectors-${dims}.bin`),
+    ]);
+    return { proxy: config.proxy, index: { vectors, dims, chunks: index.chunks } };
+  })();
+  return askIndexPromise;
+}
+
+/**
+ * Answer a typed question about `passage`.
+ *
+ * The only move that runs live in both builds. Locally it goes through the
+ * server, which already holds the key; hosted it goes through the Cloudflare
+ * Worker and does its retrieval in the browser. See seeds/ask.js.
+ */
+export async function askQuestion(passage, question) {
+  if (!STATIC) {
+    return getJSON(`/ask-passage?text=${encodeURIComponent(passage)}` +
+                   `&q=${encodeURIComponent(question)}`);
+  }
+
+  const { askQuestion: run } = await import('./ask.js');
+  const { proxy, index } = await askIndex();
+  return run({ passage, question, proxy, index });
 }
 
 export const isStatic = STATIC;

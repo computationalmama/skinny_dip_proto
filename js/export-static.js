@@ -43,6 +43,7 @@ import { config } from './config.js';
 import { createEmbeddingFunction, usesChromaEmbeddingFunction, generateEmbedding } from './embeddings.js';
 import { readProvocations } from './csv.js';
 import { zoomIn, zoomOut } from './zoom.js';
+import { packVectors, VECTOR_DIMS } from './vectors.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -338,6 +339,16 @@ for (const m of misses.slice(0, 5)) console.log(`  ! ${m.slice(0, 90)}…`);
 
 console.log('Writing dist/…');
 write('data/provocations.json', JSON.stringify(provocations));
+// The ask box does its retrieval in the browser, so the vectors ship with it.
+write(`data/vectors-${VECTOR_DIMS}.bin`, packVectors(chunks));
+
+// Where the browser sends what it can't compute itself. In its own file rather
+// than compiled into the bundle, so the Worker URL can change without a rebuild.
+write('data/config.json', JSON.stringify({
+  proxy: process.env.PROXY_URL || null,
+  vectorDims: VECTOR_DIMS,
+}));
+
 write('data/search.json', JSON.stringify({
   built: 'node export-static.js',
   chunks: chunks.map((c) => ({ text: c.text, file: c.file })),

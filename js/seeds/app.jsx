@@ -25,7 +25,7 @@ import {
   useReactFlow,
 } from '@xyflow/react';
 
-import { isStatic, loadProvocations, searchPassage, zoom } from './data.js';
+import { askQuestion, isStatic, loadProvocations, searchPassage, zoom } from './data.js';
 
 import '@xyflow/react/dist/style.css';
 import './seeds.css';
@@ -114,14 +114,14 @@ function CloseButton({ onClick }) {
 }
 
 /** An edge carrying the pill of the action that created it. */
-function actionEdge(source, target, action) {
-  const { label, color } = actionById[action] || { label: action, color: '#fff' };
+function actionEdge(source, target, action, labelOverride) {
+  const { label, color } = actionById[action] || { label: action, color: '#e0e0e0' };
   return {
     id: `edge-${target}`,
     source,
     target,
     type: 'bezier',
-    label,
+    label: labelOverride || label,
     labelShowBg: true,
     labelBgPadding: [11, 6],
     labelBgBorderRadius: 999,
@@ -276,7 +276,11 @@ function ChunkNode({ id, data }) {
     }));
 
     setNodes((ns) => ns.concat(nodes));
-    setEdges((es) => es.concat(nodes.map((n) => actionEdge(id, n.id, action))));
+    setEdges((es) => es.concat(nodes.map((n) =>
+      // An asked question labels its own edge, truncated to stay readable.
+      actionEdge(id, n.id, action, n.data.question
+        ? `“${n.data.question.slice(0, 48)}${n.data.question.length > 48 ? '…' : ''}”`
+        : null))));
   };
 
   /**
@@ -331,12 +335,34 @@ function ChunkNode({ id, data }) {
    * rest are still placeholders awaiting their own task. `action` is an ACTIONS id or
    * 'ask', and `payload` carries the typed question for 'ask'.
    */
+  /**
+   * A typed question. Unlike every other move this genuinely runs live, so it's
+   * the one that can fail for network reasons — hence the shared error line.
+   */
+  const runAsk = async (question) => {
+    const boxes = await askQuestion(data.text, question);
+
+    spawn('ask', boxes.map((box) => ({
+      title: box.title,
+      text: box.summary,
+      links: box.links || [],
+      note: box.grounded === false
+        ? 'The web search returned no sources, so this is the model answering from '
+          + 'memory — treat the names and dates in it as unchecked.'
+        : null,
+      file: box.kind === 'corpus' ? data.file : null,
+      url: null,
+      question,
+    })), ZOOM_GAP_Y);
+  };
+
   const runAction = async (action, payload) => {
     if (busy) return;
     setError(null);
 
-    const run = VECTOR_SEARCHES[action]                    ? () => search(action)
+    const run = VECTOR_SEARCHES[action]                       ? () => search(action)
               : action === 'zoom-in' || action === 'zoom-out' ? () => runZoom(action)
+              : action === 'ask' && payload                   ? () => runAsk(payload)
               : null;
 
     if (!run) {
@@ -436,10 +462,11 @@ function ChunkNode({ id, data }) {
           <input
             className="act-ask"
             type="text"
-            placeholder="Ask your own question…  (press Enter)"
+            placeholder={busy === 'ask' ? 'Asking…' : 'Ask your own question…  (press Enter)'}
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
             onKeyDown={ask}
+            disabled={busy !== null}
           />
 
           {error && <p className="act-error">{error}</p>}
