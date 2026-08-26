@@ -31,6 +31,11 @@ const DIST = path.join(ROOT, 'dist');
 // Outside the repo on purpose — see the note at the top of this file.
 const WORK = path.join(os.tmpdir(), 'skinny-dip-gh-pages');
 const BRANCH = 'gh-pages';
+// The commit is built on a throwaway branch and pushed straight to the remote
+// ref, so no local `gh-pages` ever exists. That isn't only tidiness: a local
+// branch of build output is something a stray `git checkout gh-pages` can land
+// on, which empties the working tree of every source file.
+const TEMP = 'gh-pages-build';
 
 const git = (...args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim();
 const gitIn = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
@@ -46,6 +51,7 @@ const cleanup = () => {
     try { git('worktree', 'remove', '--force', WORK); } catch {}
   }
   git('worktree', 'prune');
+  try { git('branch', '-D', TEMP); } catch {}
 
   // Refuse to recursively delete anything inside the repo, whatever WORK says.
   if (path.resolve(WORK).startsWith(path.resolve(ROOT) + path.sep)) {
@@ -63,18 +69,37 @@ cleanup();
 try {
   console.log(`Preparing ${BRANCH} worktree…`);
   git('worktree', 'add', '--detach', WORK);
-  gitIn(WORK, 'checkout', '--orphan', BRANCH);
+  gitIn(WORK, 'checkout', '--orphan', TEMP);
   gitIn(WORK, 'rm', '-rf', '--quiet', '.');
 
   console.log('Copying dist/…');
   fs.cpSync(DIST, WORK, { recursive: true });
 
+  // The export writes data/*.json incrementally and can still be running, so a
+  // copy can catch a file mid-write. Parsing them here turns that race into a
+  // failed deploy you retry, rather than a live site with truncated JSON.
+  const dataDir = path.join(WORK, 'data');
+  if (fs.existsSync(dataDir)) {
+    for (const name of fs.readdirSync(dataDir).filter((f) => f.endsWith('.json'))) {
+      const file = path.join(dataDir, name);
+      try {
+        JSON.parse(fs.readFileSync(file, 'utf8'));
+      } catch (e) {
+        throw new Error(`data/${name} is not valid JSON (${e.message}). ` +
+                        'If the export is still running, wait for it and deploy again.');
+      }
+    }
+    console.log(`  checked ${fs.readdirSync(dataDir).filter((f) => f.endsWith('.json')).length} JSON files`);
+  }
+
   gitIn(WORK, 'add', '-A');
   const sha = git('rev-parse', '--short', 'HEAD');
   gitIn(WORK, 'commit', '-m', `Deploy seeds canvas (from ${sha})`);
 
+  // HEAD:refs/heads/... rather than a branch pair, since there is no local
+  // branch by that name to push from.
   console.log(`Pushing ${BRANCH}…`);
-  gitIn(WORK, 'push', '--force', 'origin', `${BRANCH}:${BRANCH}`);
+  gitIn(WORK, 'push', '--force', 'origin', `HEAD:refs/heads/${BRANCH}`);
 
   const url = git('remote', 'get-url', 'origin')
     .replace(/^git@github\.com:/, 'https://github.com/')

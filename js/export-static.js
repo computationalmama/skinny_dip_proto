@@ -12,9 +12,10 @@
  * Needs ChromaDB running and GOOGLE_API_KEY set, same as build.
  *
  * `--zoom` is separate because it is the expensive half: three Gemini calls per
- * chunk, one of them a grounded web search. It resumes rather than restarting —
- * chunks already in data/zoom.json are left alone — so an interrupted run costs
- * only what it hadn't finished.
+ * chunk per mode, one of them a grounded web search, and there are two modes
+ * (Zoom in and Zoom out). It resumes rather than restarting — anything already
+ * in data/zoom.json is left alone — so an interrupted run costs only what it
+ * hadn't finished. `--zoom-mode in|out` does one mode at a time.
  *
  * ── Why the search can be precomputed ────────────────────────────────────────
  *
@@ -41,7 +42,7 @@ import { ChromaClient } from 'chromadb';
 import { config } from './config.js';
 import { createEmbeddingFunction, usesChromaEmbeddingFunction, generateEmbedding } from './embeddings.js';
 import { readProvocations } from './csv.js';
-import { zoomIn } from './zoom.js';
+import { zoomIn, zoomOut } from './zoom.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -61,6 +62,12 @@ const ZOOM_CONCURRENCY = 5;
 const wantZoom = process.argv.includes('--zoom');
 const limitArg = process.argv.indexOf('--limit');
 const zoomLimit = limitArg > -1 ? Number(process.argv[limitArg + 1]) : Infinity;
+
+const modeArg = process.argv.indexOf('--zoom-mode');
+const ZOOM_FNS = { in: zoomIn, out: zoomOut };
+const zoomModes = modeArg > -1 && ZOOM_FNS[process.argv[modeArg + 1]]
+  ? [process.argv[modeArg + 1]]
+  : Object.keys(ZOOM_FNS);
 
 const flatten = (t) => t.replace(/\s+/g, ' ').trim();
 
@@ -222,19 +229,43 @@ function makeSearch(chunks) {
   };
 }
 
-/** Whatever a previous run finished, so this one only pays for the rest. */
+/**
+ * Whatever previous runs finished, so this one only pays for the rest.
+ *
+ * Reads the old single-mode shape (`{ boxes: [...] }`, written before Zoom out
+ * existed) as the `in` mode rather than discarding it — that file is an hour of
+ * API spend, and the zoom-in boxes in it are still exactly what zoom-in
+ * produces.
+ */
 function loadExistingZoom(count) {
+  const empty = () => Object.fromEntries(Object.keys(ZOOM_FNS).map((m) => [m, new Array(count).fill(null)]));
   const file = path.join(DIST, 'data/zoom.json');
-  if (!fs.existsSync(file)) return new Array(count).fill(null);
+  if (!fs.existsSync(file)) return empty();
 
+  const store = empty();
   try {
     const prior = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (Array.isArray(prior?.boxes) && prior.boxes.length === count) return prior.boxes;
-    console.log('  (existing zoom.json does not match the collection — starting over)');
+
+    // Old shape: one unlabelled array, which was zoom-in.
+    const legacy = Array.isArray(prior?.boxes) ? { in: prior.boxes } : null;
+    const modes = legacy || prior?.modes || {};
+
+    let carried = 0;
+    for (const mode of Object.keys(store)) {
+      const rows = modes[mode];
+      if (!Array.isArray(rows)) continue;
+      if (rows.length !== count) {
+        console.log(`  (existing ${mode} data does not match the collection — starting it over)`);
+        continue;
+      }
+      store[mode] = rows;
+      carried += rows.filter(Boolean).length;
+    }
+    if (legacy && carried) console.log(`  (carried ${carried} pre-existing zoom-in results forward)`);
   } catch {
     console.log('  (existing zoom.json is unreadable — starting over)');
   }
-  return new Array(count).fill(null);
+  return store;
 }
 
 /** Fixed pool of workers pulling from a shared queue. */
@@ -247,40 +278,43 @@ async function runPool(tasks, size, worker) {
 }
 
 async function precomputeZoom(chunks) {
-  const boxes = loadExistingZoom(chunks.length);
+  const store = loadExistingZoom(chunks.length);
   const search = makeSearch(chunks);
 
-  const todo = chunks
-    .map((_, i) => i)
-    .filter((i) => !boxes[i])
-    .slice(0, zoomLimit);
+  // One flat work list across both modes, so the pool stays saturated rather
+  // than draining at each mode boundary.
+  const todo = [];
+  for (const mode of zoomModes) {
+    for (let i = 0; i < chunks.length; i++) if (!store[mode][i]) todo.push({ mode, i });
+  }
+  const work = todo.slice(0, zoomLimit);
 
-  const done = boxes.filter(Boolean).length;
-  console.log(`  ${done} already done, ${todo.length} to go` +
-              (zoomLimit !== Infinity ? ` (--limit ${zoomLimit})` : ''));
-  if (!todo.length) return boxes;
+  const done = zoomModes.map((m) => `${m}: ${store[m].filter(Boolean).length}/${chunks.length}`).join(', ');
+  console.log(`  have ${done}`);
+  console.log(`  ${work.length} to go` +
+              (work.length < todo.length ? ` of ${todo.length} outstanding (--limit ${zoomLimit})` : ''));
+  if (!work.length) return store;
 
   // Written after every completion, so killing the run keeps the work.
-  const save = () => write('data/zoom.json', JSON.stringify({ boxes }), { quiet: true });
+  const save = () => write('data/zoom.json', JSON.stringify({ modes: store }), { quiet: true });
 
   let finished = 0;
-  let failed = 0;
-  await runPool(todo, ZOOM_CONCURRENCY, async (i) => {
+  const failures = [];
+  await runPool(work, ZOOM_CONCURRENCY, async ({ mode, i }) => {
     try {
-      const { boxes: result } = await zoomIn(chunks[i].text, search);
-      boxes[i] = result;
+      const { boxes } = await ZOOM_FNS[mode](chunks[i].text, search);
+      store[mode][i] = boxes;
+      save();
     } catch (e) {
-      failed++;
-      console.log(`\n  ! chunk ${i}: ${e.message}`);
+      failures.push(`${mode}/${i}`);
+      console.log(`\n  ! ${mode} chunk ${i}: ${e.message}`);
     }
-    finished++;
-    if (boxes[i]) save();
-    process.stdout.write(`  zoomed ${finished} / ${todo.length}\r`);
+    process.stdout.write(`  zoomed ${++finished} / ${work.length}\r`);
   });
 
-  console.log(`\n  ${todo.length - failed} succeeded, ${failed} failed` +
-              (failed ? ' — rerun with --zoom to retry just those' : ''));
-  return boxes;
+  console.log(`\n  ${finished - failures.length} succeeded, ${failures.length} failed` +
+              (failures.length ? ' — rerun with --zoom to retry just those' : ''));
+  return store;
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -312,14 +346,16 @@ write('data/search.json', JSON.stringify({
 }));
 
 if (wantZoom) {
-  console.log('Precomputing Zoom in (3 Gemini calls per chunk)…');
-  const boxes = await precomputeZoom(chunks);
-  write('data/zoom.json', JSON.stringify({ boxes }));
+  console.log(`Precomputing zoom [${zoomModes.join(', ')}] — 3 Gemini calls per chunk per mode…`);
+  const store = await precomputeZoom(chunks);
+  write('data/zoom.json', JSON.stringify({ modes: store }));
 
-  const filled = boxes.filter(Boolean).length;
-  const ungrounded = boxes.filter(Boolean).filter((b) => b.some((x) => x.kind === 'web' && !x.grounded)).length;
-  console.log(`  ${filled} / ${chunks.length} chunks have zoom data` +
-              `, ${ungrounded} whose web box returned no citations`);
+  for (const mode of Object.keys(store)) {
+    const filled = store[mode].filter(Boolean);
+    const ungrounded = filled.filter((b) => b.some((x) => x.kind === 'web' && !x.grounded)).length;
+    console.log(`  ${mode}: ${filled.length} / ${chunks.length} chunks` +
+                `, ${ungrounded} whose web box returned no citations`);
+  }
 } else if (fs.existsSync(path.join(DIST, 'data/zoom.json'))) {
   console.log('Keeping the existing data/zoom.json (pass --zoom to refresh it).');
 }

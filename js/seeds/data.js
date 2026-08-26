@@ -108,13 +108,14 @@ function zoomIndex() {
 }
 
 /**
- * The boxes behind the Zoom in pill: two read out of the corpus, one off the web.
+ * The boxes behind the Zoom in / Zoom out pills: two from the corpus, one from
+ * the web. `mode` is 'in' (deepen) or 'out' (situate).
  *
- * Live, this is a 25-40s round trip through Gemini. Static, it's a lookup into
+ * Live, this is a 25-50s round trip through Gemini. Static, it's a lookup into
  * the export — same boxes, computed at build time.
  */
-export async function zoomIn(text) {
-  if (!STATIC) return getJSON(`/zoom?text=${encodeURIComponent(text)}`);
+export async function zoom(text, mode = 'in') {
+  if (!STATIC) return getJSON(`/zoom?mode=${mode}&text=${encodeURIComponent(text)}`);
 
   const [index, data] = await Promise.all([searchIndex(), zoomIndex()]);
   const i = index.byText.get(flatten(text));
@@ -122,9 +123,16 @@ export async function zoomIn(text) {
     throw new Error('That passage is not in the exported index — re-run the export.');
   }
 
-  const boxes = data.boxes?.[i];
+  // `modes` is the two-mode shape; `boxes` is the older single-mode file, which
+  // held zoom-in only. Read both, so a deploy that lands before the next export
+  // still serves whatever zoom-in data is already published.
+  const rows = data.modes?.[mode] || (mode === 'in' ? data.boxes : null);
+  const boxes = rows?.[i];
   if (!boxes?.length) {
-    throw new Error('No zoom was exported for this passage — run the export with --zoom.');
+    // A partial export is a normal state — it runs for the better part of an
+    // hour per mode — so this is worded for whoever is reading the canvas, not
+    // for whoever runs the export.
+    throw new Error("This passage hasn't been zoomed yet. Try another one.");
   }
   return boxes;
 }

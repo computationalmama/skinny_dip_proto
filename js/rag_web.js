@@ -19,7 +19,7 @@ import {
 import { findDocuments, parseDocument } from './parsers.js';
 import { chunkText, getChunkingInfo } from './chunking.js';
 import { readProvocations } from './csv.js';
-import { zoomIn } from './zoom.js';
+import { zoomIn, zoomOut } from './zoom.js';
 
 const __dirname   = path.dirname(fileURLToPath(import.meta.url));
 const DOCS_PATH   = path.resolve(__dirname, '../docs');
@@ -402,23 +402,26 @@ app.get('/neighbors', cosineSearchRoute('near'));
 app.get('/counterexamples', cosineSearchRoute('far'));
 
 /**
- * Zoom in on a passage — the agentic pill.
+ * Zoom in / Zoom out on a passage — the two agentic pills.
  *
  * Runs the whole pipeline live: Gemini plans what to look up, the plan is
  * searched against the vector DB, and a grounded call reaches the open web. It
- * takes 25-40s, which is why the hosted build reads a precomputed copy instead
+ * takes 25-50s, which is why the hosted build reads a precomputed copy instead
  * (see export-static.js). Same zoom.js either way.
+ *
+ * `?mode=out` situates the passage; anything else deepens it.
  */
 app.get('/zoom', async (req, res) => {
   const text = String(req.query.text || '').trim();
+  const mode = req.query.mode === 'out' ? 'out' : 'in';
   if (!text) return res.status(400).json({ error: 'text is required' });
 
   try {
     const search = async (query, n) => searchByCosine(query, n, 'near');
-    const { boxes } = await zoomIn(text, search);
+    const { boxes } = await (mode === 'out' ? zoomOut : zoomIn)(text, search);
     res.json(boxes);
   } catch (e) {
-    console.error('Zoom failed:', e.message);
+    console.error(`Zoom (${mode}) failed:`, e.message);
     res.status(500).json({ error: `Zoom failed: ${e.message}` });
   }
 });

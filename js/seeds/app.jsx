@@ -25,7 +25,7 @@ import {
   useReactFlow,
 } from '@xyflow/react';
 
-import { isStatic, loadProvocations, searchPassage, zoomIn } from './data.js';
+import { isStatic, loadProvocations, searchPassage, zoom } from './data.js';
 
 import '@xyflow/react/dist/style.css';
 import './seeds.css';
@@ -85,7 +85,7 @@ const ACTIONS = [
 const actionById = Object.fromEntries(ACTIONS.map((a) => [a.id, a]));
 
 // Zoom in runs three model calls and a web search, so it says what it's doing.
-const BUSY_LABEL = { 'zoom-in': 'Zooming…' };
+const BUSY_LABEL = { 'zoom-in': 'Zooming…', 'zoom-out': 'Zooming…' };
 
 /**
  * Actions answered by a cosine search over the vector DB.
@@ -300,17 +300,18 @@ function ChunkNode({ id, data }) {
   };
 
   /**
-   * Zoom in — the agentic move.
+   * Zoom in / Zoom out — the agentic moves.
    *
    * Gemini decides what to look up, the vector DB answers the corpus half, and a
    * grounded web search answers the rest. Three boxes come back: two from the
    * corpus, one from the web, each a short summary with whatever links it found.
-   * See zoom.js for the pipeline and data.js for which end it's read from.
+   * Zoom in deepens the passage; zoom out situates it. See zoom.js for the
+   * pipeline and data.js for which end it's read from.
    */
-  const zoom = async () => {
-    const boxes = await zoomIn(data.text);
+  const runZoom = async (action) => {
+    const boxes = await zoom(data.text, action === 'zoom-out' ? 'out' : 'in');
 
-    spawn('zoom-in', boxes.map((box) => ({
+    spawn(action, boxes.map((box) => ({
       title: box.title,
       text: box.summary,
       links: box.links || [],
@@ -326,16 +327,16 @@ function ChunkNode({ id, data }) {
   /**
    * Every pill and the ask box lands here.
    *
-   * Three moves are wired up — the two cosine searches and Zoom in. The rest are
-   * still placeholders awaiting their own task. `action` is an ACTIONS id or
+   * Four moves are wired up — the two cosine searches, Zoom in and Zoom out. The
+   * rest are still placeholders awaiting their own task. `action` is an ACTIONS id or
    * 'ask', and `payload` carries the typed question for 'ask'.
    */
   const runAction = async (action, payload) => {
     if (busy) return;
     setError(null);
 
-    const run = VECTOR_SEARCHES[action] ? () => search(action)
-              : action === 'zoom-in'    ? zoom
+    const run = VECTOR_SEARCHES[action]                    ? () => search(action)
+              : action === 'zoom-in' || action === 'zoom-out' ? () => runZoom(action)
               : null;
 
     if (!run) {
