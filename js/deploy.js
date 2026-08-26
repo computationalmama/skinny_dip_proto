@@ -29,8 +29,12 @@ if (!fs.existsSync(path.join(DIST, 'index.html'))) {
   process.exit(1);
 }
 
+// Also runs before the build, in case a previous run died partway through.
 const cleanup = () => {
-  try { git('worktree', 'remove', '--force', WORK); } catch {}
+  if (fs.existsSync(WORK)) {
+    try { git('worktree', 'remove', '--force', WORK); } catch {}
+  }
+  git('worktree', 'prune');
   fs.rmSync(WORK, { recursive: true, force: true });
 };
 
