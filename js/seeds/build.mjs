@@ -10,6 +10,11 @@
  * doesn't export it, so they fail to bundle. Don't loosen it to a caret range
  * without checking that upstream has published the matching system release.
  *
+ * Two builds, differing only in how the canvas gets its data (see data.js):
+ *
+ *   npm run build:seeds         -> js/static/       talks to the Express routes
+ *   npm run build:seeds:static  -> dist/static/     reads dist/data/*.json
+ *
  * Usage: npm run build:seeds  (add --watch to rebuild on save)
  */
 
@@ -19,10 +24,15 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const watch = process.argv.includes('--watch');
+const isStatic = process.argv.includes('--static');
+
+const outDir = isStatic
+  ? path.join(__dirname, '../../dist/static')
+  : path.join(__dirname, '../static');
 
 const options = {
   entryPoints: [path.join(__dirname, 'app.jsx')],
-  outfile: path.join(__dirname, '../static/seeds.js'),
+  outfile: path.join(outDir, 'seeds.js'),
   bundle: true,
   minify: !watch,
   sourcemap: watch,
@@ -30,7 +40,10 @@ const options = {
   target: 'es2020',
   jsx: 'automatic',
   loader: { '.js': 'jsx' },
-  define: { 'process.env.NODE_ENV': watch ? '"development"' : '"production"' },
+  define: {
+    'process.env.NODE_ENV': watch ? '"development"' : '"production"',
+    'process.env.SEEDS_STATIC': JSON.stringify(String(isStatic)),
+  },
 };
 
 if (watch) {

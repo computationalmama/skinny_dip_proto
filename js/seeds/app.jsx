@@ -25,6 +25,8 @@ import {
   useReactFlow,
 } from '@xyflow/react';
 
+import { isStatic, loadProvocations, searchPassage } from './data.js';
+
 import '@xyflow/react/dist/style.css';
 import './seeds.css';
 
@@ -82,12 +84,12 @@ const actionById = Object.fromEntries(ACTIONS.map((a) => [a.id, a]));
 /**
  * Actions answered by a cosine search over the vector DB.
  *
- * Both hit the same server code from opposite ends: `neighbors` returns the
- * closest passages, `counterexamples` the farthest.
+ * Both read the same cosine ranking from opposite ends: `near` returns the
+ * closest passages, `far` the farthest. See data.js for where they come from.
  */
 const VECTOR_SEARCHES = {
-  neighbor: { route: 'neighbors', noun: 'Neighbor' },
-  counter: { route: 'counterexamples', noun: 'Counterexample' },
+  neighbor: { direction: 'near', noun: 'Neighbor' },
+  counter: { direction: 'far', noun: 'Counterexample' },
 };
 
 // Ids for spawned nodes. A counter rather than the node count, so repeated
@@ -272,21 +274,15 @@ function ChunkNode({ id, data }) {
   };
 
   /**
-   * Search the vector DB and hang the results off this box. Live on every
-   * click — nothing here comes from the pre-computed sources column.
+   * Search the cosine ranking and hang the results off this box.
+   *
+   * Never the pre-computed `sources` column — this is the vector DB, either
+   * queried live or read from the exported index. See data.js.
    */
   const search = async (action) => {
-    const { route, noun } = VECTOR_SEARCHES[action];
+    const { direction, noun } = VECTOR_SEARCHES[action];
 
-    const res = await fetch(
-      `/${route}?text=${encodeURIComponent(data.text)}&n=${RESULT_COUNT}`,
-    );
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || `HTTP ${res.status}`);
-    }
-
-    const results = await res.json();
+    const results = await searchPassage(data.text, direction, RESULT_COUNT);
     if (!results.length) throw new Error('No other passages came back.');
 
     spawn(action, results.map((r, i) => ({
@@ -592,8 +588,7 @@ function App() {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    fetch(`/provocations?n=${SEED_COUNT}`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+    loadProvocations(SEED_COUNT)
       .then((rows) => setSeeds(rows.map((p, i) => ({ id: `seed-${i}`, ...p }))))
       .catch((e) => setError(e.message));
   }, []);
@@ -602,7 +597,11 @@ function App() {
     return (
       <p className="status">
         Could not load provocations ({error}).<br />
-        Start the server with <code>node rag_web.js serve</code> from <code>js/</code>.
+        {isStatic ? (
+          <>Re-run <code>npm run export:static</code> from <code>js/</code>.</>
+        ) : (
+          <>Start the server with <code>node rag_web.js serve</code> from <code>js/</code>.</>
+        )}
       </p>
     );
   }

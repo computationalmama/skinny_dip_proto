@@ -101,7 +101,14 @@ the dot grid, the zoom controls, and node dragging.
 | `seeds.html` | Shell page — loads the bundle, nothing else |
 | `seeds/app.jsx` | The canvas and tray. **Edit this one.** |
 | `seeds/seeds.css` | Tray, card, and React Flow styling |
+| `seeds/data.js` | Where the canvas gets its data — server or static |
 | `seeds/build.mjs` | esbuild config → `static/` (gitignored) |
+
+`seeds/data.js` is the one seam between the canvas and its data. Locally it
+calls the Express routes; the Pages build reads exported JSON instead. Which one
+is compiled in is a build-time flag, so the unused half is stripped from the
+bundle rather than branched on at runtime. See
+[Hosting on GitHub Pages](#hosting-on-github-pages).
 
 `npm run watch:seeds` rebuilds on save.
 
@@ -208,6 +215,86 @@ node provocations.js               # or: node provocations.js in.csv out.csv
 
 Retrieval only — no LLM generation, since the sources come straight from the
 returned chunks. Needs ChromaDB running, same as everything else.
+
+## Hosting on GitHub Pages
+
+The canvas runs as a fully static site — no server, no ChromaDB, no API key on
+the host. One command builds it:
+
+```bash
+npm run export:static   # -> ../dist/   (needs Chroma running + GOOGLE_API_KEY)
+npx serve dist          # check it locally first
+npm run deploy          # push dist/ to the gh-pages branch
+```
+
+Then set Pages once, in the repo's **Settings → Pages**, to branch `gh-pages` /
+root. After that `npm run deploy` is the whole loop.
+
+`dist/` is gitignored — it's build output, and `deploy.js` pushes it to an
+orphan `gh-pages` branch from a temporary worktree, so your working tree is
+never touched and `main` stays free of build artifacts.
+
+### What gets exported
+
+| File | From |
+| --- | --- |
+| `data/provocations.json` | `provocations_with_sources.csv`, parsed — the tray samples its ten in the browser |
+| `data/search.json` | The whole cosine ranking, ~140 kB |
+| `index.html`, `seeds.html` | The same shell, so the bare URL is the share link |
+| `static/seeds.{js,css}` | `npm run build:seeds:static` |
+
+### Why the vector search survives the move
+
+Every text the canvas can search is **already a chunk in the collection**.
+Source boxes carry `flatten(chunk)` — that's what `provocations.js` writes into
+the `sources` column — and result boxes carry `flatten(chunk)` returned by the
+search itself. Results can spawn results, but a result is still a chunk. So
+there are only 283 possible queries, and `export-static.js` precomputes all of
+them: every chunk re-embedded as a `RETRIEVAL_QUERY` (the asymmetry in
+`config.google.taskType` is preserved — the matrix diagonal is deliberately not
+1), the full 283² cosine matrix, top eight from each end.
+
+Checked against the live endpoints over a sample of the corpus:
+
+- **`Find a neighbor` is identical** — same passages, and the similarity scores
+  agree to every one of the four decimals they're rounded to. The only
+  divergence found was a genuine tie, two passages at `0.7367`, ordered
+  differently by the two code paths.
+- **`Counterexample` differs, and the export is the more accurate one.** Chroma
+  reaches the farthest passages by searching for the nearest neighbours of the
+  *negated* vector, and HNSW's approximation is weak out there — it under-recalls.
+  Over 21 sampled queries the export returned a strictly farther top result for
+  7 of them and never a nearer one. The export computes exact cosine over the
+  whole collection, so the ANN error is gone. Expect the hosted canvas to give
+  slightly *better* counterexamples than localhost.
+
+Because the export is keyed on flattened chunk text, it's checked for closure at
+build time: all 120 passages across the 40 provocations resolve, and so does
+every result any of them can spawn.
+
+### What can't come along
+
+- **The ask box and the four unwired pills.** Free text needs a live embedding,
+  and that needs a key the browser can't be given. They're inert on Pages
+  exactly as they're inert locally, so nothing regresses — but wiring them up
+  later means either asking each visitor for their own Gemini key or putting a
+  small proxy in front.
+- **The `/` chat page.** It generates with local Ollama. Not hostable.
+- **The `visualize-*.html` pages.** They pull `/embeddings` live. Exportable the
+  same way if wanted (~3.5 MB of vectors, or ~870 kB truncated to 768 dims), but
+  out of scope here.
+
+### Re-exporting
+
+Anything that changes the corpus or the provocations needs a fresh export —
+`npm run export:static` re-embeds all 283 chunks, so it costs a little Gemini
+quota each time:
+
+```bash
+node rag_web.js build      # corpus changed
+node provocations.js       # provocations.csv changed
+npm run deploy
+```
 
 ## Running order (summary)
 

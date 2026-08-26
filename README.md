@@ -11,8 +11,13 @@ skinny_dip_proto/
     ├── README.md
     ├── package.json
     ├── rag.js         ← CLI
-    └── rag_web.js     ← web UI  →  http://localhost:6601
+    ├── rag_web.js     ← web UI  →  http://localhost:6601
+    └── export-static.js ← seeds canvas as a static site  →  dist/
 ```
+
+The seeds canvas also runs with no server at all — `npm run export:static`
+precomputes what it used to ask ChromaDB for, and `npm run deploy` puts it on
+GitHub Pages. See [Hosting on GitHub Pages](js/README.md#hosting-on-github-pages).
 
 ---
 

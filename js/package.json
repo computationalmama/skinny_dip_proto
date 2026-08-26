@@ -10,7 +10,10 @@
     "serve": "node --env-file-if-exists=.env rag_web.js serve",
     "web-build": "node --env-file-if-exists=.env rag_web.js build",
     "build:seeds": "node seeds/build.mjs",
-    "watch:seeds": "node seeds/build.mjs --watch"
+    "watch:seeds": "node seeds/build.mjs --watch",
+    "build:seeds:static": "node seeds/build.mjs --static",
+    "export:static": "npm run build:seeds:static && node --env-file-if-exists=.env export-static.js",
+    "deploy": "npm run export:static && node deploy.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.1.3",
