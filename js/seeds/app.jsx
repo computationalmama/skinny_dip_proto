@@ -31,9 +31,134 @@ import './seeds.css';
 const SEED_COUNT = 10;
 const MIME = 'application/seed';
 
-const CARD_W = 305;   // must track .card-wrap width in seeds.css
-const GAP_X = 190;    // horizontal run between a card and its chunks
-const GAP_Y = 330;    // vertical pitch of the fan; clears a full-height .chunk
+const CARD_W = 305;    // must track .card-wrap width in seeds.css
+const CHUNK_W = 360;   // .chunk
+const GAP_X = 190;     // horizontal run between a card and its chunks
+
+// Where an action's results land relative to the box that produced them.
+const RESULT_GAP_X = 250;
+const RESULT_GAP_Y = 420;
+const RESULT_COUNT = 2;
+// The fan cascades down and to the right. Kept deliberately tight: source boxes
+// are allowed to overlap each other mildly, and an open action panel overlaps
+// the box below it outright — the open one is lifted clear with z-index instead
+// of the layout being spread out to make room.
+const GAP_Y = 305;    // vertical pitch — just under a full box, so they kiss
+const STAGGER_X = 56; // each box down the fan also steps right
+
+/**
+ * Where the canvas sits on load, and how far it can be zoomed.
+ *
+ * `zoom: 1` is 1:1 — a 305px card is 305 screen pixels. 0.6 pulls back far
+ * enough to hold a card and its whole fanned-out cascade in view; raise it
+ * toward 1 to start in closer. x/y shift the origin: positive x moves content
+ * right, positive y moves it down.
+ *
+ * Zoom is clamped to MIN_ZOOM..MAX_ZOOM, so a DEFAULT_ZOOM outside that range
+ * gets pinned to the nearest end.
+ */
+const DEFAULT_ZOOM = 0.6;
+const DEFAULT_VIEWPORT = { x: 0, y: 0, zoom: DEFAULT_ZOOM };
+const MIN_ZOOM = 0.15;
+const MAX_ZOOM = 2.5;
+
+/**
+ * The moves offered on a source box.
+ *
+ * Each one's behaviour is a separate task — `runAction` below is the single
+ * seam where they get wired up. Order here is the order they wrap on screen.
+ */
+const ACTIONS = [
+  { id: 'neighbor', label: 'Find a neighbor', color: '#efa8f2' },
+  { id: 'compare', label: 'Compare this', color: '#c3a4f7' },
+  { id: 'counter', label: 'Counterexample', color: '#a5f0b5' },
+  { id: 'zoom-in', label: 'Zoom in', color: '#ef9a3e' },
+  { id: 'zoom-out', label: 'Zoom out', color: '#e8f53f' },
+  { id: 'evidence', label: 'Find evidence', color: '#77c7f2' },
+];
+
+const actionById = Object.fromEntries(ACTIONS.map((a) => [a.id, a]));
+
+/**
+ * Actions answered by a cosine search over the vector DB.
+ *
+ * Both hit the same server code from opposite ends: `neighbors` returns the
+ * closest passages, `counterexamples` the farthest.
+ */
+const VECTOR_SEARCHES = {
+  neighbor: { route: 'neighbors', noun: 'Neighbor' },
+  counter: { route: 'counterexamples', noun: 'Counterexample' },
+};
+
+// Ids for spawned nodes. A counter rather than the node count, so repeated
+// clicks can't collide after something has been removed.
+let spawnSeq = 0;
+
+/** The × that sits on a box's top-right corner. Shared by every box type. */
+function CloseButton({ onClick }) {
+  return (
+    <button className="box-close nodrag" onClick={onClick} title="Remove" aria-label="Remove">
+      <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+        <path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      </svg>
+    </button>
+  );
+}
+
+/** An edge carrying the pill of the action that created it. */
+function actionEdge(source, target, action) {
+  const { label, color } = actionById[action] || { label: action, color: '#fff' };
+  return {
+    id: `edge-${target}`,
+    source,
+    target,
+    type: 'bezier',
+    label,
+    labelShowBg: true,
+    labelBgPadding: [11, 6],
+    labelBgBorderRadius: 999,
+    labelBgStyle: { fill: color, stroke: '#000', strokeWidth: 1.5 },
+    labelStyle: { fill: '#000', fontWeight: 600, fontSize: 13 },
+    style: { stroke: '#000', strokeWidth: 2 },
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#000', width: 16, height: 16 },
+  };
+}
+
+/**
+ * A node's id plus every node descended from it, via `data.parentId`.
+ *
+ * Results can now spawn results, so removing a box has to take the whole
+ * subtree rather than just its direct children.
+ */
+function useRemoveSubtree(id) {
+  const { getNodes, setNodes, setEdges } = useReactFlow();
+
+  return (event) => {
+    event?.stopPropagation();
+
+    // Computed from getNodes() rather than inside the setNodes updater: a
+    // state updater must stay pure, and React may run it more than once.
+    const doomed = withDescendants(getNodes(), id);
+    setNodes((ns) => ns.filter((n) => !doomed.has(n.id)));
+    setEdges((es) => es.filter((e) => !doomed.has(e.source) && !doomed.has(e.target)));
+  };
+}
+
+function withDescendants(nodes, rootId) {
+  const doomed = new Set([rootId]);
+  let grew = true;
+
+  while (grew) {
+    grew = false;
+    for (const node of nodes) {
+      if (!doomed.has(node.id) && doomed.has(node.data?.parentId)) {
+        doomed.add(node.id);
+        grew = true;
+      }
+    }
+  }
+  return doomed;
+}
 
 // ── Canvas node ───────────────────────────────────────────────────────────────
 
@@ -54,14 +179,9 @@ function Chevron({ up }) {
  */
 function CardNode({ id, data }) {
   const [expanded, setExpanded] = useState(false);
-  const { setNodes, setEdges } = useReactFlow();
 
-  // Taking a card away takes its chunks and their edges with it.
-  const remove = (event) => {
-    event.stopPropagation();
-    setNodes((ns) => ns.filter((n) => n.id !== id && n.data?.parentId !== id));
-    setEdges((es) => es.filter((e) => e.source !== id));
-  };
+  // Taking a card away takes its chunks, their results, and every edge between.
+  const remove = useRemoveSubtree(id);
 
   return (
     <div className="card-wrap">
@@ -77,11 +197,7 @@ function CardNode({ id, data }) {
       </div>
 
       {/* `nodrag` keeps a click on these from panning the node underneath. */}
-      <button className="card-close nodrag" onClick={remove} title="Remove card" aria-label="Remove card">
-        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-          <path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-        </svg>
-      </button>
+      <CloseButton onClick={remove} />
 
       <button
         className={`card-expand nodrag${expanded ? ' is-open' : ''}`}
@@ -119,33 +235,163 @@ function GlobeIcon() {
   );
 }
 
-/** One retrieved passage from the sources column. */
-function ChunkNode({ data }) {
+/**
+ * One retrieved passage from the sources column.
+ *
+ * Clicking the box opens the action pills beneath it; clicking it again closes
+ * them.
+ */
+function ChunkNode({ id, data }) {
+  const [open, setOpen] = useState(false);
+  const [question, setQuestion] = useState('');
+  const [busy, setBusy] = useState(null);
+  const [error, setError] = useState(null);
+  const { setNodes, setEdges, getNode } = useReactFlow();
+  const remove = useRemoveSubtree(id);
+
+  /** Drop `results` onto the canvas to the right, joined by labelled edges. */
+  const spawn = (action, results) => {
+    const self = getNode(id);
+    if (!self) return;
+
+    const centreY = self.position.y + (self.measured?.height ?? 300) / 2;
+    const x = self.position.x + CHUNK_W + RESULT_GAP_X;
+
+    const nodes = results.map((result, i) => ({
+      id: `${id}-${action}-${spawnSeq++}`,
+      type: 'chunk',
+      position: {
+        x,
+        y: centreY + (i - (results.length - 1) / 2) * RESULT_GAP_Y - 150,
+      },
+      data: { ...result, parentId: id },
+    }));
+
+    setNodes((ns) => ns.concat(nodes));
+    setEdges((es) => es.concat(nodes.map((n) => actionEdge(id, n.id, action))));
+  };
+
+  /**
+   * Search the vector DB and hang the results off this box. Live on every
+   * click — nothing here comes from the pre-computed sources column.
+   */
+  const search = async (action) => {
+    const { route, noun } = VECTOR_SEARCHES[action];
+
+    const res = await fetch(
+      `/${route}?text=${encodeURIComponent(data.text)}&n=${RESULT_COUNT}`,
+    );
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || `HTTP ${res.status}`);
+    }
+
+    const results = await res.json();
+    if (!results.length) throw new Error('No other passages came back.');
+
+    spawn(action, results.map((r, i) => ({
+      title: `${noun} ${i + 1} · ${Math.round(r.similarity * 100)}% similar`,
+      text: r.text,
+      file: r.file,
+      url: null,
+    })));
+  };
+
+  /**
+   * Every pill and the ask box lands here.
+   *
+   * The two vector searches are wired up; the rest are still placeholders
+   * awaiting their own task. `action` is an ACTIONS id or 'ask', and `payload`
+   * carries the typed question for 'ask'.
+   */
+  const runAction = async (action, payload) => {
+    if (busy) return;
+    setError(null);
+
+    if (!VECTOR_SEARCHES[action]) {
+      void payload;
+      return;
+    }
+
+    setBusy(action);
+    try {
+      await search(action);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const ask = (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    const q = question.trim();
+    if (!q) return;
+    runAction('ask', q);
+    setQuestion('');
+  };
+
   return (
-    <div className="chunk">
-      <Handle type="target" position={Position.Left} />
+    <div className={`chunk-wrap${open ? ' chunk-wrap--open' : ''}`}>
+      <div className="chunk" onClick={() => setOpen((v) => !v)}>
+        {/* Incoming from whatever produced this box, and outgoing to the
+            results its own action pills spawn. Both styled invisible. */}
+        <Handle type="target" position={Position.Left} />
+        <Handle type="source" position={Position.Right} />
 
-      <h3 className="chunk-title">{data.title}</h3>
-      <p className="chunk-body nowheel nodrag">{data.text}</p>
+        <h3 className="chunk-title">{data.title}</h3>
+        <p className="chunk-body nowheel nodrag">{data.text}</p>
 
-      <div className="chunk-chips">
-        <span className="chip" title={data.file}>
-          <FileIcon /> Source
-        </span>
+        <div className="chunk-chips">
+          <span className="chip" title={data.file}>
+            <FileIcon /> Source
+          </span>
 
-        {/* A few passages quote a link inline; only then is there a web source. */}
-        {data.url && (
-          <a
-            className="chip chip--web nodrag"
-            href={data.url}
-            target="_blank"
-            rel="noreferrer"
-            title={data.url}
-          >
-            <GlobeIcon /> Source
-          </a>
-        )}
+          {/* A few passages quote a link inline; only then is there a web source. */}
+          {data.url && (
+            <a
+              className="chip chip--web nodrag"
+              href={data.url}
+              target="_blank"
+              rel="noreferrer"
+              title={data.url}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <GlobeIcon /> Source
+            </a>
+          )}
+        </div>
       </div>
+
+      <CloseButton onClick={remove} />
+
+      {open && (
+        <div className="chunk-actions nodrag" onClick={(event) => event.stopPropagation()}>
+          {ACTIONS.map((action) => (
+            <button
+              key={action.id}
+              className="act"
+              style={{ background: action.color }}
+              onClick={() => runAction(action.id)}
+              disabled={busy !== null}
+            >
+              {busy === action.id ? 'Searching…' : action.label}
+            </button>
+          ))}
+
+          <input
+            className="act-ask"
+            type="text"
+            placeholder="Ask your own question…  (press Enter)"
+            value={question}
+            onChange={(event) => setQuestion(event.target.value)}
+            onKeyDown={ask}
+          />
+
+          {error && <p className="act-error">{error}</p>}
+        </div>
+      )}
     </div>
   );
 }
@@ -263,8 +509,11 @@ function Canvas({ initialSeeds }) {
       if (!passages.length) return;
 
       if (nodes.some((n) => n.data?.parentId === node.id)) {
-        setNodes((ns) => ns.filter((n) => n.data?.parentId !== node.id));
-        setEdges((es) => es.filter((e) => e.source !== node.id));
+        // Chunks may have spawned results of their own — take the subtree.
+        const doomed = withDescendants(nodes, node.id);
+        doomed.delete(node.id);
+        setNodes((ns) => ns.filter((n) => !doomed.has(n.id)));
+        setEdges((es) => es.filter((e) => !doomed.has(e.target)));
         return;
       }
 
@@ -277,7 +526,7 @@ function Canvas({ initialSeeds }) {
         id: `${node.id}-chunk-${i}`,
         type: 'chunk',
         position: {
-          x,
+          x: x + i * STAGGER_X,
           y: centreY + (i - (passages.length - 1) / 2) * GAP_Y - 150,
         },
         data: {
@@ -315,8 +564,9 @@ function Canvas({ initialSeeds }) {
         onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
         nodeTypes={nodeTypes}
-        minZoom={0.15}
-        maxZoom={2.5}
+        defaultViewport={DEFAULT_VIEWPORT}
+        minZoom={MIN_ZOOM}
+        maxZoom={MAX_ZOOM}
         panOnScroll
         selectionOnDrag
       >

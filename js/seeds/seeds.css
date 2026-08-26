@@ -136,6 +136,7 @@ body {
   letter-spacing: 0;
   color: rgba(255, 255, 255, .62);
   cursor: auto;
+  overflow-wrap: anywhere;
 }
 
 .card-sources::-webkit-scrollbar { width: 6px; }
@@ -146,7 +147,7 @@ body {
 
 /* ── Hover controls ─────────────────────────────────────────────────────────── */
 
-.card-close,
+.box-close,
 .card-expand {
   position: absolute;
   opacity: 0;
@@ -154,13 +155,14 @@ body {
   cursor: pointer;
 }
 
-.card-wrap:hover .card-close,
+.card-wrap:hover .box-close,
 .card-wrap:hover .card-expand,
-.card-close:focus-visible,
+.chunk-wrap:hover .box-close,
+.box-close:focus-visible,
 .card-expand:focus-visible { opacity: 1; }
 
-/* Centred on the top-right corner, half outside the card. */
-.card-close {
+/* Centred on the top-right corner, half outside the box. */
+.box-close {
   top: 0;
   right: 0;
   transform: translate(50%, -50%);
@@ -176,7 +178,7 @@ body {
   box-shadow: 0 2px 8px rgba(0, 0, 0, .12);
 }
 
-.card-close:hover { background: #f2f2f2; }
+.box-close:hover { background: #f2f2f2; }
 
 /* Pill hanging off the bottom edge, centred. */
 .card-expand {
@@ -251,14 +253,17 @@ body {
   letter-spacing: -.015em;
 }
 
-/* Passages run ~500 characters. Capped so the three fanned cards keep a
-   predictable height and don't collide — GAP_Y in app.jsx assumes this. */
+/* Passages run ~500 characters. Capped so the boxes keep a roughly even height
+   down the fan — they may overlap a little, which is fine, but a 900px card
+   next to a 300px one is not. */
 .chunk-body {
   max-height: 180px;
   overflow-y: auto;
   font-size: 15px;
   line-height: 1.5;
   color: #4a4a4a;
+  /* Some chunks are a bare URL with no spaces to break on. */
+  overflow-wrap: anywhere;
 }
 
 .chunk-body::-webkit-scrollbar { width: 6px; }
@@ -298,3 +303,70 @@ body {
   min-width: 0;
   min-height: 0;
 }
+
+/* ── Source-box actions ─────────────────────────────────────────────────────── */
+
+/* Positioning context for the box's × — without it the × anchors to whatever
+   ancestor happens to be positioned, which is React Flow's node wrapper. */
+.chunk-wrap { position: relative; width: 360px; }
+
+.chunk { cursor: pointer; }
+
+/* Wider than the card it hangs under, so the pills wrap the way the design
+   does: two, then three, then one, then the ask box across the full row. */
+.chunk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  width: 420px;
+  margin-top: 14px;
+  cursor: default;
+}
+
+.act {
+  padding: 8px 18px;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: -.01em;
+  color: var(--ink);
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.act:hover { filter: brightness(.94); }
+.act:active { transform: translateY(1px); }
+
+/* Pill colours live in ACTIONS in app.jsx and are set inline, so the pill and
+   the edge label its results hang off can't drift apart. */
+
+.act:disabled { opacity: .55; cursor: default; }
+.act:disabled:hover { filter: none; }
+
+.act-error {
+  flex: 1 0 100%;
+  font-size: 13px;
+  line-height: 1.4;
+  color: #b4232a;
+}
+
+/* Full-width row of its own. */
+.act-ask {
+  flex: 1 0 100%;
+  padding: 11px 20px;
+  font: inherit;
+  font-size: 16px;
+  color: var(--ink);
+  background: #fff;
+  border: 3px solid #4aa5f7;
+  border-radius: 999px;
+  outline: none;
+}
+
+.act-ask::placeholder { color: #8b8b8b; }
+.act-ask:focus { border-color: #1e8ef5; }
+
+/* An open panel overlaps the chunk below it in the fan — lift it clear.
+   React Flow sets z-index inline on the node, so this has to shout. */
+.react-flow__node:has(.chunk-wrap--open) { z-index: 20 !important; }

@@ -325,6 +325,81 @@ app.get('/provocations', (req, res) => {
 // asking, so an open tab keeps running a stale build after `npm run build:seeds`.
 const noCache = (res) => res.setHeader('Cache-Control', 'no-cache');
 
+/**
+ * Snippets nearest to, or farthest from, a passage — searched live against the
+ * vector DB. Not the pre-computed sources column: this embeds the passage and
+ * asks Chroma every time it's called.
+ *
+ * The collection was built without an `hnsw:space`, so Chroma indexed it with
+ * its default squared-L2 rather than cosine. The Gemini vectors are unit
+ * length, which makes the two orderings equivalent and the distance exactly
+ * convertible, and it's what makes the `far` direction possible at all:
+ *
+ *   squaredL2(a, v)  = 2 - 2(a·v)   ->  cos = 1 - d/2   (smallest d = nearest)
+ *   squaredL2(a, -v) = 2 + 2(a·v)   ->  cos = d/2 - 1   (smallest d = farthest)
+ *
+ * Chroma can only search for nearest, so `far` searches for the nearest
+ * neighbours of the *negated* query vector, which are the farthest from the
+ * passage itself. Both conversions are checked against hand-computed cosines
+ * over the full collection in the tests.
+ */
+async function queryVector(text) {
+  if (!usesChromaEmbeddingFunction()) return generateEmbedding(text);
+  return (await queryEmbeddingFunction.generate([text]))[0];
+}
+
+async function searchByCosine(text, want, direction) {
+  const collectionConfig = { name: 'docs' };
+  if (usesChromaEmbeddingFunction()) collectionConfig.embeddingFunction = queryEmbeddingFunction;
+  const col = await chroma.getCollection(collectionConfig);
+
+  const far = direction === 'far';
+  const v = await queryVector(text);
+
+  // Over-fetch: the passage is itself a chunk in the collection, so a `near`
+  // search returns it as its own closest match and it has to be dropped.
+  const results = await col.query({
+    queryEmbeddings: [far ? v.map((x) => -x) : v],
+    nResults: want + 4,
+  });
+
+  const toSimilarity = far ? (d) => d / 2 - 1 : (d) => 1 - d / 2;
+  const flatten = (t) => t.replace(/\s+/g, ' ').trim();
+  const self = flatten(text).toLowerCase();
+
+  const out = [];
+  for (let i = 0; i < results.documents[0].length && out.length < want; i++) {
+    const doc = flatten(results.documents[0][i]);
+    if (doc.toLowerCase() === self) continue;
+
+    out.push({
+      text: doc,
+      file: results.metadatas[0][i]?.source || '',
+      similarity: Number(toSimilarity(results.distances[0][i]).toFixed(4)),
+    });
+  }
+  return out;
+}
+
+function cosineSearchRoute(direction) {
+  return async (req, res) => {
+    const text = String(req.query.text || '').trim();
+    const want = Math.min(Math.max(Number(req.query.n) || 2, 1), 8);
+
+    if (!text) return res.status(400).json({ error: 'text is required' });
+
+    try {
+      res.json(await searchByCosine(text, want, direction));
+    } catch (e) {
+      console.error(`Cosine search (${direction}) failed:`, e.message);
+      res.status(500).json({ error: `Search failed: ${e.message}` });
+    }
+  };
+}
+
+app.get('/neighbors', cosineSearchRoute('near'));
+app.get('/counterexamples', cosineSearchRoute('far'));
+
 app.use('/static', express.static(path.join(__dirname, 'static'), { setHeaders: noCache }));
 app.get('/seeds.html', (_req, res) =>
   res.sendFile(path.join(__dirname, 'seeds.html'), { headers: { 'Cache-Control': 'no-cache' } }));

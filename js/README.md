@@ -119,13 +119,67 @@ removing the card takes its chunks and edges with it. Each chunk card carries a
 whenever that passage quotes a URL inline (only three passages in the current
 corpus do).
 
+**Clicking a source box** opens its action pills — Find a neighbour, Compare
+this, Counterexample, Zoom in, Zoom out, Find evidence — plus an "ask your own
+question" box that fires on Enter. Clicking the box again closes them.
+
+**Find a neighbor** and **Counterexample** are wired up. Both search the vector
+DB live on every click — from opposite ends of the same ranking — and hang the
+results off the box as new boxes joined by edges carrying the action's pill.
+Nothing about them is pre-computed; `/neighbors` and `/counterexamples` share
+one implementation in `searchByCosine`.
+
+The collection was built without an `hnsw:space`, so Chroma indexed it with its
+default squared-L2, not cosine. The Gemini vectors are unit length, which makes
+the two orderings equivalent and the distance exactly convertible — and it's
+what makes the farthest search possible at all, since Chroma can only search for
+nearest:
+
+    squaredL2(a, v)  = 2 - 2(a·v)   ->  cos = 1 - d/2   (smallest d = nearest)
+    squaredL2(a, -v) = 2 + 2(a·v)   ->  cos = d/2 - 1   (smallest d = farthest)
+
+So `Counterexample` searches for the nearest neighbours of the **negated** query
+vector. Both directions were checked against brute-force cosine over the whole
+collection: same passages, same scores to four decimals.
+
+Caveat on `Counterexample`: farthest-by-cosine finds the most *unrelated*
+passage, not a rebuttal. In this corpus that skews toward the degenerate chunks
+— captions, bare URLs, fragments. Measured over 12 lookups, 5 came back
+degenerate (under 120 chars or a bare URL) against 1 of 12 for the nearest
+search.
+
+The other four pills and the ask box are **still inert**. Every one of them
+calls `runAction(action, payload)` in `ChunkNode` — the single seam. Adding a
+move means a row in `ACTIONS` (id, label, colour) and a branch in `runAction`;
+`spawn()` and `actionEdge()` handle placing the results and labelling the edge.
+
+Because results can spawn results, removing a box takes its whole subtree —
+`withDescendants` walks `data.parentId`.
+
+The canvas opens at `DEFAULT_ZOOM` (0.6), set alongside `MIN_ZOOM`/`MAX_ZOOM`
+in `app.jsx` — pulled back far enough to hold a card and its whole cascade in
+view at once. `1` is 1:1.
+
+The fan cascades down and to the right — `GAP_Y` (305) sets the vertical pitch
+and `STAGGER_X` (56) the sideways step. The pitch sits just under a full-height
+box on purpose: source boxes are meant to overlap each other a little, and each
+one down the fan paints over the one above it. An open action panel overlaps the
+box below outright and is lifted clear with z-index rather than the layout being
+spread out to make room. `.chunk-body` is capped at `180px` to keep box heights
+roughly even down the fan.
+
 The chunk titles are `Source 1..3`. If those should instead be the prompt-style
 moves from the mock — Compare this / Find evidence / Counterexample — that's the
 `title` field in `onNodeClick`.
 
+**Every box carries an ×** on its top-right corner, revealed on hover — the
+shared `CloseButton`, placed by `.box-close`. Removing a box takes its whole
+subtree with it (`useRemoveSubtree` → `withDescendants`), so closing a source
+box also clears any neighbours it found, and closing the card clears everything.
+
 Hovering a card reveals two controls, both in `CardNode`:
 
-- **×**, centred on the top-right corner — removes the card from the canvas.
+- **×**, centred on the top-right corner — removes the card and its subtree.
 - **Expand**, a pill on the bottom edge — reveals that provocation's retrieved
   source passages beneath a divider. The passages are capped at `260px` and
   scroll, so a card can't grow tall enough to push its own Collapse button
